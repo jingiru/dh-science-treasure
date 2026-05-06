@@ -31,6 +31,7 @@ export default function TeacherPage() {
 
   const mapRef = useRef<any>(null);
   const clustererRef = useRef<any>(null);
+  const locationsRef = useRef<StudentLocation[]>([]);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const markerStateRef = useRef<Map<string, { marker: any; infoWindow: any; staleOverlay?: any; nameLabelOverlay?: any }>>(new Map());
 
@@ -47,6 +48,7 @@ export default function TeacherPage() {
   }, [ok]);
 
   useEffect(() => {
+    locationsRef.current = locations;
     if (!mapRef.current || !window.kakao?.maps) return;
     renderMarkers(locations);
   }, [locations]);
@@ -105,10 +107,10 @@ export default function TeacherPage() {
       });
 
       kakao.maps.event.addListener(mapRef.current, 'zoom_changed', () => {
-        renderMarkers(locations);
+        renderMarkers(locationsRef.current);
       });
 
-      renderMarkers(locations);
+      renderMarkers(locationsRef.current);
     });
   }
 
