@@ -88,3 +88,14 @@ with check (true);
 
 - `treasures`: `id`, `name`, `description`, `latitude`, `longitude`, `radius_m`, `image_url`, `remaining_count`
 - `treasure_logs`: `id`, `student_id`, `student_name`, `treasure_id`, `treasure_name`, `created_at`
+
+## 카카오맵 설정 안내
+
+교사용 대시보드에서 카카오맵(JavaScript SDK)을 사용하려면 카카오 개발자 콘솔에서 **JavaScript 키 도메인 등록**이 필요합니다.
+
+- 예시 배포 도메인: `https://dh-science-treasure.vercel.app`
+- 로컬 개발 도메인도 함께 등록 권장: `http://localhost:3000`
+
+또한 학생 마커가 많을 때 클러스터링을 사용하려면 SDK URL에 `libraries=clusterer`를 포함해야 합니다.
+
+- 예시: `https://dapi.kakao.com/v2/maps/sdk.js?appkey=YOUR_APP_KEY&autoload=false&libraries=clusterer`

@@ -30,8 +30,9 @@ export default function TeacherPage() {
   const [errorMessage, setErrorMessage] = useState('');
 
   const mapRef = useRef<any>(null);
+  const clustererRef = useRef<any>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
-  const markerStateRef = useRef<Map<string, { marker: any; infoWindow: any; staleOverlay?: any }>>(new Map());
+  const markerStateRef = useRef<Map<string, { marker: any; infoWindow: any; staleOverlay?: any; nameLabelOverlay?: any }>>(new Map());
 
   useEffect(() => {
     if (!ok) return;
@@ -71,7 +72,7 @@ export default function TeacherPage() {
 
     const script = document.createElement('script');
     script.id = scriptId;
-    script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${appKey}&autoload=false`;
+    script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${appKey}&autoload=false&libraries=clusterer`;
     script.async = true;
     script.onload = initMap;
     document.head.appendChild(script);
@@ -87,21 +88,54 @@ export default function TeacherPage() {
         level: 4,
       };
       mapRef.current = new kakao.maps.Map(mapContainerRef.current, options);
+
+      if (!kakao.maps.MarkerClusterer) {
+        const clustererError = '카카오맵 클러스터러 로딩 실패: SDK URL에 libraries=clusterer가 포함되어 있는지 확인하세요.';
+        console.error(clustererError);
+        setErrorMessage(clustererError);
+        return;
+      }
+
+      clustererRef.current = new kakao.maps.MarkerClusterer({
+        map: mapRef.current,
+        averageCenter: true,
+        minLevel: 5,
+        disableClickZoom: false,
+        gridSize: 60,
+      });
+
+      kakao.maps.event.addListener(mapRef.current, 'zoom_changed', () => {
+        renderMarkers(locations);
+      });
+
       renderMarkers(locations);
     });
+  }
+
+  function getShortLabelText(name: string | undefined, studentId: string) {
+    const baseText = (name ?? '').trim();
+    if (baseText.length >= 2) return baseText.slice(-2);
+    if (baseText.length === 1) return baseText;
+    return studentId.slice(-2);
   }
 
   function renderMarkers(items: StudentLocation[]) {
     const kakao = window.kakao;
     const map = mapRef.current;
-    if (!kakao?.maps || !map) return;
+    const clusterer = clustererRef.current;
+    if (!kakao?.maps || !map || !clusterer) return;
 
-    markerStateRef.current.forEach(({ marker, staleOverlay, infoWindow }) => {
+    markerStateRef.current.forEach(({ marker, staleOverlay, infoWindow, nameLabelOverlay }) => {
       marker.setMap(null);
       infoWindow.close();
       if (staleOverlay) staleOverlay.setMap(null);
+      if (nameLabelOverlay) nameLabelOverlay.setMap(null);
     });
     markerStateRef.current.clear();
+    clusterer.clear();
+
+    const showNameLabel = map.getLevel() <= 5;
+    const markers: any[] = [];
 
     items.forEach((loc) => {
       if (typeof loc.latitude !== 'number' || typeof loc.longitude !== 'number') return;
@@ -116,7 +150,6 @@ export default function TeacherPage() {
       );
 
       const marker = new kakao.maps.Marker({
-        map,
         position,
         image: markerImage,
         title: `${loc.student_name ?? '이름없음'}(${loc.student_id})`,
@@ -147,12 +180,29 @@ export default function TeacherPage() {
         });
       }
 
+      let nameLabelOverlay;
+      if (showNameLabel) {
+        const shortLabel = getShortLabelText(loc.student_name, loc.student_id);
+        const staleStyle = isStale ? 'opacity:0.6;filter:grayscale(0.25);' : '';
+        nameLabelOverlay = new kakao.maps.CustomOverlay({
+          map,
+          position,
+          yAnchor: 1.9,
+          content: `<div style="background:white;border:1px solid #d0d7e2;border-radius:999px;padding:2px 6px;font-size:11px;font-weight:700;box-shadow:0 1px 4px rgba(0,0,0,0.15);${staleStyle}">${shortLabel}</div>`,
+        });
+      }
+
       kakao.maps.event.addListener(marker, 'click', () => {
         infoWindow.open(map, marker);
       });
 
-      markerStateRef.current.set(loc.student_id, { marker, infoWindow, staleOverlay });
+      markers.push(marker);
+      markerStateRef.current.set(loc.student_id, { marker, infoWindow, staleOverlay, nameLabelOverlay });
     });
+
+    if (markers.length > 0) {
+      clusterer.addMarkers(markers);
+    }
   }
 
   async function load() {
