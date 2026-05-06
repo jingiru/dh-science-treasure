@@ -19,8 +19,72 @@ NEXT_PUBLIC_TEACHER_PASSWORD=1234
 npm run dev
 ```
 
-## Supabase 테이블 예시
+## Supabase SQL 예시
+
+```sql
+create table if not exists public.students (
+  student_id text primary key,
+  student_name text not null,
+  created_at timestamptz default now(),
+  last_login_at timestamptz default now()
+);
+
+create table if not exists public.current_locations (
+  student_id text primary key,
+  student_name text not null,
+  latitude double precision not null,
+  longitude double precision not null,
+  accuracy_m double precision,
+  updated_at timestamptz default now()
+);
+```
+
+## RLS 테스트용 정책 예시
+
+```sql
+alter table public.students enable row level security;
+alter table public.current_locations enable row level security;
+
+create policy "students_select_test"
+on public.students
+for select
+to anon
+using (true);
+
+create policy "students_insert_test"
+on public.students
+for insert
+to anon
+with check (true);
+
+create policy "students_update_test"
+on public.students
+for update
+to anon
+using (true)
+with check (true);
+
+create policy "locations_select_test"
+on public.current_locations
+for select
+to anon
+using (true);
+
+create policy "locations_insert_test"
+on public.current_locations
+for insert
+to anon
+with check (true);
+
+create policy "locations_update_test"
+on public.current_locations
+for update
+to anon
+using (true)
+with check (true);
+```
+
+## 기존 테이블
 
 - `treasures`: `id`, `name`, `description`, `latitude`, `longitude`, `radius_m`, `image_url`, `remaining_count`
 - `treasure_logs`: `id`, `student_id`, `student_name`, `treasure_id`, `treasure_name`, `created_at`
-- `current_locations`: `student_id`, `student_name`, `latitude`, `longitude`, `updated_at`

@@ -26,6 +26,7 @@ export default function Home() {
   const [myLogs, setMyLogs] = useState<number[]>([]);
   const [current, setCurrent] = useState<Coord | null>(null);
   const [locationNotice, setLocationNotice] = useState('');
+  const [supabaseErrorMessage, setSupabaseErrorMessage] = useState('');
   const [selected, setSelected] = useState<Treasure | null>(null);
   const [message, setMessage] = useState('');
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -61,8 +62,7 @@ export default function Home() {
         setCurrent(loc);
 
         if (pos.coords.accuracy > 100) {
-          setLocationNotice('위치 정확도가 낮습니다');
-          return;
+          setLocationNotice(`위치 정확도가 낮습니다. 약 ${Math.round(pos.coords.accuracy)} m`);
         }
 
         const now = Date.now();
@@ -80,17 +80,23 @@ export default function Home() {
           student_name: student.studentName,
           latitude: loc.latitude,
           longitude: loc.longitude,
+          accuracy_m: pos.coords.accuracy,
           updated_at: new Date().toISOString()
-        });
+        }, { onConflict: 'student_id' });
 
         if (error) {
+          console.error('current_locations upsert error:', error);
           setLocationNotice('위치 저장 중 오류가 발생했습니다.');
+          setSupabaseErrorMessage(`위치 저장 실패: ${error.message}`);
           return;
         }
 
         lastSavedRef.current = { ...loc, accuracy: pos.coords.accuracy };
         lastSavedAtRef.current = now;
-        setLocationNotice('');
+        if (pos.coords.accuracy <= 100) {
+          setLocationNotice('');
+        }
+        setSupabaseErrorMessage('');
       },
       () => undefined,
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
@@ -109,12 +115,22 @@ export default function Home() {
   }, [treasures, current, myLogs]);
 
   async function fetchTreasures() {
-    const { data } = await supabase.from('treasures').select('*').order('id');
+    const { data, error } = await supabase.from('treasures').select('*').order('id');
+    if (error) {
+      console.error('treasures select error:', error);
+      setMessage(`보물 목록 조회 오류: ${error.message}`);
+      return;
+    }
     setTreasures((data ?? []) as Treasure[]);
   }
 
   async function fetchMyLogs(studentId: string) {
-    const { data } = await supabase.from('treasure_logs').select('treasure_id').eq('student_id', studentId);
+    const { data, error } = await supabase.from('treasure_logs').select('treasure_id').eq('student_id', studentId);
+    if (error) {
+      console.error('treasure_logs select error:', error);
+      setMessage(`내 획득 기록 조회 오류: ${error.message}`);
+      return;
+    }
     setMyLogs((data ?? []).map((v) => v.treasure_id as number));
   }
 
@@ -124,6 +140,19 @@ export default function Home() {
       return;
     }
     const s = { studentId: idInput, studentName: nameInput.trim() };
+
+    const { error } = await supabase.from('students').upsert({
+      student_id: s.studentId,
+      student_name: s.studentName,
+      last_login_at: new Date().toISOString()
+    }, { onConflict: 'student_id' });
+
+    if (error) {
+      console.error('students upsert error:', error);
+      setMessage(`로그인 처리 오류: ${error.message}`);
+      return;
+    }
+
     setStudent(s);
     localStorage.setItem('dh-student', JSON.stringify(s));
     setMessage('로그인되었습니다.');
@@ -206,6 +235,7 @@ export default function Home() {
         <div className="row"><strong>{student.studentName} ({student.studentId})</strong><button onClick={() => { localStorage.removeItem('dh-student'); setStudent(null); }} style={{ width: 80, padding: 8 }}>로그아웃</button></div>
         <p className="small">현재 위치: {current ? `${current.latitude.toFixed(5)}, ${current.longitude.toFixed(5)}` : '확인 중'}</p>
         {!!locationNotice && <p className="small">{locationNotice}</p>}
+        {!!supabaseErrorMessage && <p className="small">{supabaseErrorMessage}</p>}
         <p className="small">※ 앱이 백그라운드 상태이거나 화면이 꺼지면 위치 갱신이 일시 중단될 수 있습니다.</p>
       </div>
 

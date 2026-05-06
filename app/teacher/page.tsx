@@ -8,11 +8,8 @@ type StudentLocation = {
   latitude: number;
   longitude: number;
   accuracy_m?: number | null;
+  student_name: string;
   updated_at: string;
-  students?: {
-    student_id?: string | null;
-    name?: string | null;
-  } | null;
 };
 
 declare global {
@@ -30,6 +27,7 @@ export default function TeacherPage() {
   const [stats, setStats] = useState<{ student_name: string; student_id: string; count: number }[]>([]);
   const [logs, setLogs] = useState<TreasureLog[]>([]);
   const [locations, setLocations] = useState<StudentLocation[]>([]);
+  const [errorMessage, setErrorMessage] = useState('');
 
   const mapRef = useRef<any>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
@@ -121,7 +119,7 @@ export default function TeacherPage() {
         map,
         position,
         image: markerImage,
-        title: `${loc.students?.name ?? '이름없음'}(${loc.student_id})`,
+        title: `${loc.student_name ?? '이름없음'}(${loc.student_id})`,
       });
 
       const updatedAtLabel = new Date(loc.updated_at).toLocaleString('ko-KR');
@@ -130,8 +128,8 @@ export default function TeacherPage() {
       const infoWindow = new kakao.maps.InfoWindow({
         content: `
           <div style="padding:10px 12px;min-width:220px;line-height:1.5;">
-            <p style="margin:0 0 4px;"><strong>학번:</strong> ${loc.students?.student_id ?? loc.student_id}</p>
-            <p style="margin:0 0 4px;"><strong>이름:</strong> ${loc.students?.name ?? '이름없음'}</p>
+            <p style="margin:0 0 4px;"><strong>학번:</strong> ${loc.student_id}</p>
+            <p style="margin:0 0 4px;"><strong>이름:</strong> ${loc.student_name ?? '이름없음'}</p>
             <p style="margin:0 0 4px;"><strong>마지막 갱신:</strong> ${updatedAtLabel}</p>
             <p style="margin:0;"><strong>GPS 정확도:</strong> ${accuracy}m</p>
             ${staleText}
@@ -158,7 +156,12 @@ export default function TeacherPage() {
   }
 
   async function load() {
-    const { data: rawLogs } = await supabase.from('treasure_logs').select('*').order('created_at', { ascending: false }).limit(30);
+    const { data: rawLogs, error: logsError } = await supabase.from('treasure_logs').select('*').order('created_at', { ascending: false }).limit(30);
+    if (logsError) {
+      console.error('treasure_logs select error:', logsError);
+      setErrorMessage(`획득 로그 조회 오류: ${logsError.message}`);
+      return;
+    }
     const list = (rawLogs ?? []) as TreasureLog[];
     setLogs(list);
     const map = new Map<string, { student_name: string; student_id: string; count: number }>();
@@ -170,10 +173,18 @@ export default function TeacherPage() {
     });
     setStats(Array.from(map.values()).sort((a, b) => b.count - a.count));
 
-    const { data: loc } = await supabase
+    const { data: loc, error: locationError } = await supabase
       .from('current_locations')
-      .select('student_id, latitude, longitude, accuracy_m, updated_at, students(student_id, name)')
+      .select('student_id, student_name, latitude, longitude, accuracy_m, updated_at')
       .order('updated_at', { ascending: false });
+
+    if (locationError) {
+      console.error('current_locations select error:', locationError);
+      setErrorMessage(`위치 조회 오류: ${locationError.message}`);
+      return;
+    }
+
+    setErrorMessage('');
     setLocations((loc ?? []) as StudentLocation[]);
   }
 
@@ -192,6 +203,7 @@ export default function TeacherPage() {
   return (
     <main className="teacher-main">
       <h1>교사용 대시보드</h1>
+      {!!errorMessage && <p className="small">{errorMessage}</p>}
       <div className="card teacher-map-card">
         <h3>학생 위치 지도 (마지막 위치)</h3>
         <div ref={mapContainerRef} className="teacher-map" />
