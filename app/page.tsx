@@ -6,6 +6,7 @@ import { supabase, Treasure } from '@/lib/supabase';
 
 type Student = { studentId: string; studentName: string };
 type Coord = { latitude: number; longitude: number };
+type PositionSnapshot = Coord & { accuracy: number };
 
 function distanceMeter(a: Coord, b: Coord) {
   const R = 6371e3;
@@ -24,9 +25,12 @@ export default function Home() {
   const [treasures, setTreasures] = useState<Treasure[]>([]);
   const [myLogs, setMyLogs] = useState<number[]>([]);
   const [current, setCurrent] = useState<Coord | null>(null);
+  const [locationNotice, setLocationNotice] = useState('');
   const [selected, setSelected] = useState<Treasure | null>(null);
   const [message, setMessage] = useState('');
   const videoRef = useRef<HTMLVideoElement>(null);
+  const lastSavedRef = useRef<PositionSnapshot | null>(null);
+  const lastSavedAtRef = useRef<number>(0);
 
   useEffect(() => {
     const raw = localStorage.getItem('dh-student');
@@ -41,30 +45,58 @@ export default function Home() {
 
   useEffect(() => {
     if (!student) return;
+    if (!window.isSecureContext || location.protocol !== 'https:') {
+      setLocationNotice('위치 기능은 HTTPS 환경에서만 안정적으로 동작합니다. Vercel 배포 주소(https)에서 이용해주세요.');
+      return;
+    }
+    if (!navigator.geolocation) {
+      setLocationNotice('이 브라우저는 위치 서비스를 지원하지 않습니다.');
+      return;
+    }
+
+    setLocationNotice('');
     const watchId = navigator.geolocation.watchPosition(
-      (pos) => {
+      async (pos) => {
         const loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
         setCurrent(loc);
+
+        if (pos.coords.accuracy > 100) {
+          setLocationNotice('위치 정확도가 낮습니다');
+          return;
+        }
+
+        const now = Date.now();
+        if (now - lastSavedAtRef.current < 30000) {
+          return;
+        }
+
+        const previous = lastSavedRef.current;
+        if (previous && distanceMeter(previous, loc) < 5) {
+          return;
+        }
+
+        const { error } = await supabase.from('current_locations').upsert({
+          student_id: student.studentId,
+          student_name: student.studentName,
+          latitude: loc.latitude,
+          longitude: loc.longitude,
+          updated_at: new Date().toISOString()
+        });
+
+        if (error) {
+          setLocationNotice('위치 저장 중 오류가 발생했습니다.');
+          return;
+        }
+
+        lastSavedRef.current = { ...loc, accuracy: pos.coords.accuracy };
+        lastSavedAtRef.current = now;
+        setLocationNotice('');
       },
       () => undefined,
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
     );
     return () => navigator.geolocation.clearWatch(watchId);
   }, [student]);
-
-  useEffect(() => {
-    if (!student || !current) return;
-    const timer = setInterval(async () => {
-      await supabase.from('current_locations').upsert({
-        student_id: student.studentId,
-        student_name: student.studentName,
-        latitude: current.latitude,
-        longitude: current.longitude,
-        updated_at: new Date().toISOString()
-      });
-    }, 30000);
-    return () => clearInterval(timer);
-  }, [student, current]);
 
   const statusList = useMemo(() => {
     return treasures.map((t) => {
@@ -173,6 +205,8 @@ export default function Home() {
       <div className="card">
         <div className="row"><strong>{student.studentName} ({student.studentId})</strong><button onClick={() => { localStorage.removeItem('dh-student'); setStudent(null); }} style={{ width: 80, padding: 8 }}>로그아웃</button></div>
         <p className="small">현재 위치: {current ? `${current.latitude.toFixed(5)}, ${current.longitude.toFixed(5)}` : '확인 중'}</p>
+        {!!locationNotice && <p className="small">{locationNotice}</p>}
+        <p className="small">※ 앱이 백그라운드 상태이거나 화면이 꺼지면 위치 갱신이 일시 중단될 수 있습니다.</p>
       </div>
 
       <h3>보물 목록</h3>
