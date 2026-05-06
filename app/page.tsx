@@ -7,6 +7,7 @@ import { supabase, Treasure } from '@/lib/supabase';
 type Student = { studentId: string; studentName: string };
 type Coord = { latitude: number; longitude: number };
 type PositionSnapshot = Coord & { accuracy: number };
+type TreasureStatus = Treasure & { near: boolean; taken: boolean; distanceM: number | null; effectiveRadiusM: number; soldOut: boolean };
 
 function distanceMeter(a: Coord, b: Coord) {
   const R = 6371e3;
@@ -23,11 +24,13 @@ export default function Home() {
   const [idInput, setIdInput] = useState('');
   const [nameInput, setNameInput] = useState('');
   const [treasures, setTreasures] = useState<Treasure[]>([]);
-  const [myLogs, setMyLogs] = useState<number[]>([]);
+  const [myLogs, setMyLogs] = useState<string[]>([]);
   const [current, setCurrent] = useState<Coord | null>(null);
+  const [currentAccuracy, setCurrentAccuracy] = useState<number | null>(null);
+  const [myTreasureNames, setMyTreasureNames] = useState<string[]>([]);
   const [locationNotice, setLocationNotice] = useState('');
   const [supabaseErrorMessage, setSupabaseErrorMessage] = useState('');
-  const [selected, setSelected] = useState<Treasure | null>(null);
+  const [selected, setSelected] = useState<TreasureStatus | null>(null);
   const [message, setMessage] = useState('');
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSavedRef = useRef<PositionSnapshot | null>(null);
@@ -60,9 +63,10 @@ export default function Home() {
       async (pos) => {
         const loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
         setCurrent(loc);
+        setCurrentAccuracy(pos.coords.accuracy);
 
         if (pos.coords.accuracy > 100) {
-          setLocationNotice(`위치 정확도가 낮습니다. 약 ${Math.round(pos.coords.accuracy)} m`);
+          setLocationNotice('위치 정확도가 낮아 보물 판정이 넓게 적용될 수 있습니다.');
         }
 
         const now = Date.now();
@@ -104,18 +108,22 @@ export default function Home() {
     return () => navigator.geolocation.clearWatch(watchId);
   }, [student]);
 
-  const statusList = useMemo(() => {
+  const statusList = useMemo<TreasureStatus[]>(() => {
     return treasures.map((t) => {
-      const near = current
-        ? distanceMeter(current, { latitude: t.latitude, longitude: t.longitude }) <= t.radius_m
-        : false;
-      const taken = myLogs.includes(t.id);
-      return { ...t, near, taken, soldOut: t.remaining_count <= 0 };
+      const distanceM = current
+        ? distanceMeter(current, { latitude: t.latitude, longitude: t.longitude })
+        : null;
+      const effectiveRadiusM = currentAccuracy
+        ? Math.min(100, Math.max(t.radius_m, currentAccuracy * 0.7))
+        : t.radius_m;
+      const near = distanceM !== null ? distanceM <= effectiveRadiusM : false;
+      const taken = myLogs.includes(String(t.id));
+      return { ...t, near, taken, distanceM, effectiveRadiusM, soldOut: t.remaining_count <= 0 };
     });
-  }, [treasures, current, myLogs]);
+  }, [treasures, current, currentAccuracy, myLogs]);
 
   async function fetchTreasures() {
-    const { data, error } = await supabase.from('treasures').select('*').order('id');
+    const { data, error } = await supabase.from('treasures').select('*').order('order_index', { ascending: true });
     if (error) {
       console.error('treasures select error:', error);
       setMessage(`보물 목록 조회 오류: ${error.message}`);
@@ -125,13 +133,15 @@ export default function Home() {
   }
 
   async function fetchMyLogs(studentId: string) {
-    const { data, error } = await supabase.from('treasure_logs').select('treasure_id').eq('student_id', studentId);
+    const { data, error } = await supabase.from('treasure_logs').select('treasure_id, treasure_name').eq('student_id', studentId);
     if (error) {
       console.error('treasure_logs select error:', error);
       setMessage(`내 획득 기록 조회 오류: ${error.message}`);
       return;
     }
-    setMyLogs((data ?? []).map((v) => v.treasure_id as number));
+    const logs = data ?? [];
+    setMyLogs(logs.map((v) => String(v.treasure_id)));
+    setMyTreasureNames(logs.map((v) => v.treasure_name as string).filter(Boolean));
   }
 
   async function login() {
@@ -158,13 +168,19 @@ export default function Home() {
     setMessage('로그인되었습니다.');
   }
 
-  async function openCamera(t: Treasure) {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
-    if (videoRef.current) {
-      videoRef.current.srcObject = stream;
-      await videoRef.current.play();
+  async function openCamera(t: TreasureStatus) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      setSelected(t);
+      setSupabaseErrorMessage('');
+    } catch (error) {
+      console.error('camera open error:', error);
+      setMessage('카메라 권한이 필요합니다.');
     }
-    setSelected(t);
   }
 
   function closeCamera() {
@@ -180,7 +196,7 @@ export default function Home() {
       .from('treasure_logs')
       .select('id')
       .eq('student_id', student.studentId)
-      .eq('treasure_id', selected.id)
+      .eq('treasure_id', String(selected.id))
       .maybeSingle();
     if (already) {
       setMessage('이미 획득한 보물입니다.');
@@ -195,18 +211,32 @@ export default function Home() {
       return;
     }
 
-    await supabase.from('treasure_logs').insert({
+    const { error: insertError } = await supabase.from('treasure_logs').insert({
       student_id: student.studentId,
       student_name: student.studentName,
-      treasure_id: selected.id,
-      treasure_name: target.name
+      treasure_id: String(selected.id),
+      treasure_name: target.name,
+      latitude: current?.latitude ?? selected.latitude,
+      longitude: current?.longitude ?? selected.longitude,
+      created_at: new Date().toISOString()
     });
+    if (insertError) {
+      console.error('treasure_logs insert error:', insertError);
+      setMessage(insertError.message);
+      return;
+    }
 
-    await supabase
-      .from('treasures')
-      .update({ remaining_count: target.remaining_count - 1 })
-      .eq('id', selected.id)
-      .gt('remaining_count', 0);
+    if (target.remaining_count < 999) {
+      const { error: updateError } = await supabase
+        .from('treasures')
+        .update({ remaining_count: target.remaining_count - 1 })
+        .eq('id', selected.id)
+        .gt('remaining_count', 0);
+      if (updateError) {
+        console.error('treasures update error:', updateError);
+        setMessage(updateError.message);
+      }
+    }
 
     setMessage(`${target.name} 획득 성공!`);
     closeCamera();
@@ -244,9 +274,11 @@ export default function Home() {
         <div key={t.id} className="card">
           <div className="row"><strong>{t.name}</strong>{t.near ? <span className="badge badge-ok">탐색 가능</span> : <span className="badge badge-no">이동 필요</span>}</div>
           <p>{t.description}</p>
+          <p className="small">현재 거리: {t.distanceM !== null ? `${Math.round(t.distanceM)} m` : '측정 중'}</p>
+          <p className="small">판정 반경: {Math.round(t.effectiveRadiusM)} m</p>
           <p className="small">잔여 수량: {t.remaining_count}</p>
           <button disabled={!t.near || t.taken || t.soldOut} onClick={() => openCamera(t)}>
-            {t.taken ? '이미 획득' : t.soldOut ? '품절' : '카메라 탐색 시작'}
+            {t.taken ? '이미 획득' : t.soldOut ? '품절' : '카메라로 찾기'}
           </button>
         </div>
       ))}
@@ -254,7 +286,7 @@ export default function Home() {
       <div className="card">
         <h3>내 현황</h3>
         <p>획득 개수: {myLogs.length}개</p>
-        <p className="small">획득 보물 ID: {myLogs.join(', ') || '없음'}</p>
+        <p className="small">획득 보물 이름: {myTreasureNames.join(', ') || '없음'}</p>
       </div>
 
       {selected && (
