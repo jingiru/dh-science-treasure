@@ -13,3 +13,7 @@ video { width: 100%; height: 100%; object-fit: cover; }
 @keyframes bounce { 0%,100% { transform: translateY(0);} 50% { transform: translateY(-8px);} }
 .small { color: #5a6472; font-size: 13px; }
 .row { display:flex; justify-content:space-between; gap:8px; align-items:center; }
+
+.teacher-main { max-width: 1200px; }
+.teacher-map-card { padding: 18px; }
+.teacher-map { width: 100%; height: 520px; border-radius: 14px; border: 1px solid #d7e3f8; }
