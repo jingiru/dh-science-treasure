@@ -398,21 +398,23 @@ export default function Home() {
         {!current && <p className="small">위치 신호를 확인하는 중입니다.</p>}
         {!!locationNotice && <p className="small">{locationNotice}</p>}
         {!!supabaseErrorMessage && <p className="small">{supabaseErrorMessage}</p>}
-        <p className="small">보물 신호는 이동하면서 자동으로 바뀝니다.</p>
-        <p className="small">새로고침 버튼을 누르면 위치 정보가 바로 갱신됩니다.</p>
-        <p className="small">건물 안이나 이동 중에는 신호가 늦게 바뀔 수 있습니다.</p>
+        <div className="compact-notice">
+          <p className="small">보물 신호는 이동하면서 자동으로 바뀝니다.</p>
+          <p className="small">새로고침 버튼을 누르면 위치 정보가 바로 갱신됩니다.</p>
+          <p className="small">건물 안이나 이동 중에는 신호가 늦게 바뀔 수 있습니다.</p>
+        </div>
 
         <section className="signal-guide">
           <h3 className="signal-guide__title">보물 신호 안내</h3>
-          <ul className="signal-guide__list">
-            <li className="signal-guide__item"><span className="signal-dot signal-dot--cold" aria-hidden />신호 없음 - 반경 밖</li>
-            <li className="signal-guide__item"><span className="signal-dot signal-dot--weak" aria-hidden />약한 신호 - 반경 160m 이내</li>
-            <li className="signal-guide__item"><span className="signal-dot signal-dot--warm" aria-hidden />중간 신호 - 반경 120m 이내</li>
-            <li className="signal-guide__item"><span className="signal-dot signal-dot--hot" aria-hidden />강한 신호 - 반경 80m 이내</li>
-            <li className="signal-guide__item"><span className="signal-dot signal-dot--available" aria-hidden />획득 가능 - 반경 50m 이내</li>
-            <li className="signal-guide__item"><span className="signal-dot signal-dot--collected" aria-hidden />획득 완료</li>
-          </ul>
-          <p className="small">GPS 상태에 따라 실제 반응 범위는 조금 달라질 수 있습니다.</p>
+          <div className="signal-legend">
+            <span className="signal-legend__item"><span className="signal-dot signal-dot--cold" aria-hidden />반경 밖</span>
+            <span className="signal-legend__item"><span className="signal-dot signal-dot--weak" aria-hidden />160m</span>
+            <span className="signal-legend__item"><span className="signal-dot signal-dot--warm" aria-hidden />120m</span>
+            <span className="signal-legend__item"><span className="signal-dot signal-dot--hot" aria-hidden />80m</span>
+            <span className="signal-legend__item"><span className="signal-dot signal-dot--available" aria-hidden />50m</span>
+            <span className="signal-legend__item"><span className="signal-dot signal-dot--collected" aria-hidden />완료</span>
+          </div>
+          <p className="small signal-guide__note">GPS 상태에 따라 실제 반응 범위는 조금 달라질 수 있습니다.</p>
         </section>
       </div>
 
