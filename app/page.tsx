@@ -23,6 +23,7 @@ export default function Home() {
   const [student, setStudent] = useState<Student | null>(null);
   const [idInput, setIdInput] = useState('');
   const [nameInput, setNameInput] = useState('');
+  const [pinInput, setPinInput] = useState('');
   const [treasures, setTreasures] = useState<Treasure[]>([]);
   const [myLogs, setMyLogs] = useState<string[]>([]);
   const [current, setCurrent] = useState<Coord | null>(null);
@@ -145,26 +146,41 @@ export default function Home() {
   }
 
   async function login() {
-    if (!/^\d{4}$/.test(idInput) || nameInput.trim().length < 1) {
-      setMessage('학번 4자리와 이름을 정확히 입력해주세요.');
+    if (!/^\d{4}$/.test(idInput)) {
+      setMessage('학번은 숫자 4자리로 입력해주세요.');
+      return;
+    }
+    if (nameInput.trim().length < 1) {
+      setMessage('이름을 1글자 이상 입력해주세요.');
+      return;
+    }
+    if (!/^\d{4}$/.test(pinInput)) {
+      setMessage('비밀번호는 숫자 4자리로 입력해주세요.');
       return;
     }
     const s = { studentId: idInput, studentName: nameInput.trim() };
 
-    const { error } = await supabase.from('students').upsert({
-      student_id: s.studentId,
-      student_name: s.studentName,
-      last_login_at: new Date().toISOString()
-    }, { onConflict: 'student_id' });
+    const { data, error } = await supabase.rpc('login_or_register_student', {
+      p_student_id: s.studentId,
+      p_student_name: s.studentName,
+      p_pin: pinInput,
+    });
 
     if (error) {
-      console.error('students upsert error:', error);
-      setMessage(`로그인 처리 오류: ${error.message}`);
+      console.error('login_or_register_student rpc error:', error);
+      setMessage(error.message);
+      return;
+    }
+
+    const result = Array.isArray(data) ? data[0] : null;
+    if (!result?.ok) {
+      setMessage(result?.message ?? '로그인에 실패했습니다.');
       return;
     }
 
     setStudent(s);
     localStorage.setItem('dh-student', JSON.stringify(s));
+    setPinInput('');
     setMessage('로그인되었습니다.');
   }
 
@@ -249,8 +265,18 @@ export default function Home() {
       <main>
         <h1>대전동화중 과학관 보물찾기</h1>
         <div className="card">
-          <input placeholder="학번 4자리" maxLength={4} value={idInput} onChange={(e) => setIdInput(e.target.value)} />
+          <input placeholder="학번 4자리" maxLength={4} value={idInput} onChange={(e) => setIdInput(e.target.value.replace(/\D/g, '').slice(0, 4))} />
           <input placeholder="이름" value={nameInput} onChange={(e) => setNameInput(e.target.value)} />
+          <input
+            type="password"
+            inputMode="numeric"
+            placeholder="비밀번호 숫자 4자리"
+            maxLength={4}
+            value={pinInput}
+            onChange={(e) => setPinInput(e.target.value.replace(/\D/g, '').slice(0, 4))}
+          />
+          <p className="small">처음 로그인할 때 입력한 숫자 4자리가 이후 로그인 비밀번호로 등록됩니다.</p>
+          <p className="small">비밀번호를 잊어버리면 선생님에게 초기화를 요청하세요.</p>
           <button onClick={login}>로그인</button>
           <p className="small">{message}</p>
         </div>
