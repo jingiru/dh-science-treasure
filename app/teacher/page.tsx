@@ -1,9 +1,11 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase, TreasureLog } from '@/lib/supabase';
 
 const TEACHER_AUTH_STORAGE_KEY = 'dh-teacher-auth';
+const DEFAULT_CENTER = { lat: 36.3744, lng: 127.3867 };
+const TOP_LIMIT = 15;
 
 type StudentLocation = {
   student_id: string;
@@ -14,36 +16,72 @@ type StudentLocation = {
   updated_at: string;
 };
 
-declare global {
-  interface Window {
-    kakao?: any;
-  }
-}
+type Treasure = {
+  id: string;
+  name: string;
+  order_index: number;
+  radius_m: number;
+  latitude: number;
+  longitude: number;
+};
 
-const STALE_MINUTES = 3;
-const DEFAULT_CENTER = { lat: 36.3744, lng: 127.3867 }; // 대전 국립중앙과학관 인근
+declare global {
+  interface Window { kakao?: any }
+}
 
 export default function TeacherPage() {
   const [pw, setPw] = useState('');
   const [ok, setOk] = useState(false);
-  const [stats, setStats] = useState<{ student_name: string; student_id: string; count: number }[]>([]);
   const [logs, setLogs] = useState<TreasureLog[]>([]);
   const [locations, setLocations] = useState<StudentLocation[]>([]);
+  const [stats, setStats] = useState<{ student_name: string; student_id: string; count: number }[]>([]);
+  const [treasures, setTreasures] = useState<Treasure[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const isAuthenticated = window.localStorage.getItem(TEACHER_AUTH_STORAGE_KEY) === 'true';
-    if (isAuthenticated) {
-      setOk(true);
-    }
-  }, []);
+  const [selectedClass, setSelectedClass] = useState('전체');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [showAllStats, setShowAllStats] = useState(false);
 
   const mapRef = useRef<any>(null);
   const clustererRef = useRef<any>(null);
-  const locationsRef = useRef<StudentLocation[]>([]);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
-  const markerStateRef = useRef<Map<string, { marker: any; infoWindow: any; staleOverlay?: any; nameLabelOverlay?: any }>>(new Map());
+  const locationsRef = useRef<StudentLocation[]>([]);
+  const markerStateRef = useRef<Map<string, { marker: any; infoWindow: any; nameLabelOverlay?: any }>>(new Map());
+  const treasureStateRef = useRef<{ markers: any[]; overlays: any[]; infoWindows: any[] }>({ markers: [], overlays: [], infoWindows: [] });
+  const openedInfoWindowRef = useRef<any>(null);
+
+  const classes = ['전체', ...Array.from({ length: 9 }, (_, i) => `${i + 1}반`)];
+
+  const classOf = (studentId?: string) => studentId?.[1] ?? '';
+  const byClass = (studentId: string) => selectedClass === '전체' || classOf(studentId) === selectedClass[0];
+  const bySearch = (studentId: string, name: string) => {
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return true;
+    return studentId.toLowerCase().includes(q) || (name ?? '').toLowerCase().includes(q);
+  };
+
+  const filteredLocations = useMemo(
+    () => locations.filter((loc) => byClass(loc.student_id) && bySearch(loc.student_id, loc.student_name)),
+    [locations, selectedClass, searchTerm],
+  );
+
+  const filteredStats = useMemo(
+    () => stats.filter((s) => byClass(s.student_id) && bySearch(s.student_id, s.student_name)),
+    [stats, selectedClass, searchTerm],
+  );
+
+  const displayedStats = showAllStats ? filteredStats : filteredStats.slice(0, TOP_LIMIT);
+
+  const locationRows = useMemo(() => {
+    const statMap = new Map(filteredStats.map((s) => [s.student_id, s.count]));
+    return [...filteredLocations]
+      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+      .map((loc) => ({ ...loc, count: statMap.get(loc.student_id) ?? 0 }));
+  }, [filteredLocations, filteredStats]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (window.localStorage.getItem(TEACHER_AUTH_STORAGE_KEY) === 'true') setOk(true);
+  }, []);
 
   useEffect(() => {
     if (!ok) return;
@@ -52,38 +90,22 @@ export default function TeacherPage() {
     return () => clearInterval(timer);
   }, [ok]);
 
-  useEffect(() => {
-    if (!ok) return;
-    loadKakaoMapScript();
-  }, [ok]);
+  useEffect(() => { if (ok) loadKakaoMapScript(); }, [ok]);
 
   useEffect(() => {
-    locationsRef.current = locations;
+    locationsRef.current = filteredLocations;
     if (!mapRef.current || !window.kakao?.maps) return;
-    renderMarkers(locations);
-  }, [locations]);
+    renderMarkers(filteredLocations);
+  }, [filteredLocations, treasures]);
 
   function loadKakaoMapScript() {
-    if (window.kakao?.maps) {
-      initMap();
-      return;
-    }
-
+    if (window.kakao?.maps) return initMap();
     const appKey = process.env.NEXT_PUBLIC_KAKAO_MAP_APP_KEY;
-    if (!appKey) {
-      console.warn('NEXT_PUBLIC_KAKAO_MAP_APP_KEY 환경변수가 설정되지 않았습니다.');
-      return;
-    }
-
-    const scriptId = 'kakao-map-script';
-    const existingScript = document.getElementById(scriptId) as HTMLScriptElement | null;
-    if (existingScript) {
-      existingScript.addEventListener('load', initMap);
-      return;
-    }
-
+    if (!appKey) return;
+    const existing = document.getElementById('kakao-map-script') as HTMLScriptElement | null;
+    if (existing) return existing.addEventListener('load', initMap);
     const script = document.createElement('script');
-    script.id = scriptId;
+    script.id = 'kakao-map-script';
     script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${appKey}&autoload=false&libraries=clusterer`;
     script.async = true;
     script.onload = initMap;
@@ -93,42 +115,38 @@ export default function TeacherPage() {
   function initMap() {
     const kakao = window.kakao;
     if (!kakao?.maps || !mapContainerRef.current || mapRef.current) return;
-
     kakao.maps.load(() => {
-      const options = {
-        center: new kakao.maps.LatLng(DEFAULT_CENTER.lat, DEFAULT_CENTER.lng),
-        level: 4,
-      };
-      mapRef.current = new kakao.maps.Map(mapContainerRef.current, options);
-
-      if (!kakao.maps.MarkerClusterer) {
-        const clustererError = '카카오맵 클러스터러 로딩 실패: SDK URL에 libraries=clusterer가 포함되어 있는지 확인하세요.';
-        console.error(clustererError);
-        setErrorMessage(clustererError);
-        return;
-      }
-
-      clustererRef.current = new kakao.maps.MarkerClusterer({
-        map: mapRef.current,
-        averageCenter: true,
-        minLevel: 5,
-        disableClickZoom: false,
-        gridSize: 60,
-      });
-
-      kakao.maps.event.addListener(mapRef.current, 'zoom_changed', () => {
-        renderMarkers(locationsRef.current);
-      });
-
+      mapRef.current = new kakao.maps.Map(mapContainerRef.current, { center: new kakao.maps.LatLng(DEFAULT_CENTER.lat, DEFAULT_CENTER.lng), level: 4 });
+      clustererRef.current = new kakao.maps.MarkerClusterer({ map: mapRef.current, averageCenter: true, minLevel: 5, gridSize: 60 });
       renderMarkers(locationsRef.current);
     });
   }
 
-  function getShortLabelText(name: string | undefined, studentId: string) {
-    const baseText = (name ?? '').trim();
-    if (baseText.length >= 2) return baseText.slice(-2);
-    if (baseText.length === 1) return baseText;
-    return studentId.slice(-2);
+  function closeOpened() {
+    if (openedInfoWindowRef.current) openedInfoWindowRef.current.close();
+  }
+
+  function renderTreasureMarkers(map: any, kakao: any) {
+    treasureStateRef.current.markers.forEach((m) => m.setMap(null));
+    treasureStateRef.current.overlays.forEach((o) => o.setMap(null));
+    treasureStateRef.current.infoWindows.forEach((i) => i.close());
+    treasureStateRef.current = { markers: [], overlays: [], infoWindows: [] };
+
+    treasures.forEach((t, idx) => {
+      const position = new kakao.maps.LatLng(t.latitude, t.longitude);
+      const marker = new kakao.maps.Marker({ position, map, title: `보물 ${idx + 1}` });
+      const overlay = new kakao.maps.CustomOverlay({
+        map,
+        position,
+        yAnchor: 2.1,
+        content: `<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:999px;padding:2px 7px;font-size:12px;font-weight:700;">🎁 ${idx + 1}</div>`,
+      });
+      const infoWindow = new kakao.maps.InfoWindow({ content: `<div style="padding:10px;line-height:1.45;"><p style="margin:0 0 4px;"><strong>보물 번호:</strong> ${idx + 1}</p><p style="margin:0 0 4px;"><strong>보물 이름:</strong> ${t.name}</p><p style="margin:0;"><strong>반경:</strong> ${t.radius_m}m</p></div>` });
+      kakao.maps.event.addListener(marker, 'click', () => { closeOpened(); infoWindow.open(map, marker); openedInfoWindowRef.current = infoWindow; });
+      treasureStateRef.current.markers.push(marker);
+      treasureStateRef.current.overlays.push(overlay);
+      treasureStateRef.current.infoWindows.push(infoWindow);
+    });
   }
 
   function renderMarkers(items: StudentLocation[]) {
@@ -137,170 +155,106 @@ export default function TeacherPage() {
     const clusterer = clustererRef.current;
     if (!kakao?.maps || !map || !clusterer) return;
 
-    markerStateRef.current.forEach(({ marker, staleOverlay, infoWindow, nameLabelOverlay }) => {
-      marker.setMap(null);
-      infoWindow.close();
-      if (staleOverlay) staleOverlay.setMap(null);
-      if (nameLabelOverlay) nameLabelOverlay.setMap(null);
-    });
+    closeOpened();
+    markerStateRef.current.forEach(({ marker, infoWindow, nameLabelOverlay }) => { marker.setMap(null); infoWindow.close(); if (nameLabelOverlay) nameLabelOverlay.setMap(null); });
     markerStateRef.current.clear();
     clusterer.clear();
 
-    const showNameLabel = map.getLevel() <= 5;
     const markers: any[] = [];
+    const showNameLabel = map.getLevel() <= 5;
 
     items.forEach((loc) => {
-      if (typeof loc.latitude !== 'number' || typeof loc.longitude !== 'number') return;
-
       const position = new kakao.maps.LatLng(loc.latitude, loc.longitude);
-      const isStale = Date.now() - new Date(loc.updated_at).getTime() >= STALE_MINUTES * 60 * 1000;
-      const markerImage = new kakao.maps.MarkerImage(
-        isStale
-          ? 'https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/markerStar.png'
-          : 'https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/marker_red.png',
-        new kakao.maps.Size(24, 35)
-      );
-
-      const marker = new kakao.maps.Marker({
-        position,
-        image: markerImage,
-        title: `${loc.student_name ?? '이름없음'}(${loc.student_id})`,
-      });
-
-      const updatedAtLabel = new Date(loc.updated_at).toLocaleString('ko-KR');
-      const accuracy = loc.accuracy_m ?? '-';
-      const staleText = isStale ? '<p style="margin:2px 0;color:#b42318;font-weight:600;">⚠ 오래됨(3분 이상)</p>' : '';
-      const infoWindow = new kakao.maps.InfoWindow({
-        content: `
-          <div style="padding:10px 12px;min-width:220px;line-height:1.5;">
-            <p style="margin:0 0 4px;"><strong>학번:</strong> ${loc.student_id}</p>
-            <p style="margin:0 0 4px;"><strong>이름:</strong> ${loc.student_name ?? '이름없음'}</p>
-            <p style="margin:0 0 4px;"><strong>마지막 갱신:</strong> ${updatedAtLabel}</p>
-            <p style="margin:0;"><strong>GPS 정확도:</strong> ${accuracy}m</p>
-            ${staleText}
-          </div>
-        `,
-      });
-
-      let staleOverlay;
-      if (isStale) {
-        staleOverlay = new kakao.maps.CustomOverlay({
-          map,
-          position,
-          yAnchor: 2.2,
-          content: '<div style="background:#fff3f2;color:#b42318;border:1px solid #fecdca;border-radius:999px;padding:2px 7px;font-size:11px;">오래됨</div>',
-        });
-      }
+      const marker = new kakao.maps.Marker({ position, title: `${loc.student_name}(${loc.student_id})` });
+      const infoWindow = new kakao.maps.InfoWindow({ content: `<div style="padding:10px 12px;min-width:220px;line-height:1.5;"><p style="margin:0 0 4px;"><strong>학번:</strong> ${loc.student_id}</p><p style="margin:0 0 4px;"><strong>이름:</strong> ${loc.student_name ?? '이름없음'}</p><p style="margin:0 0 4px;"><strong>마지막 갱신:</strong> ${new Date(loc.updated_at).toLocaleString('ko-KR')}</p><p style="margin:0 0 8px;"><strong>GPS 정확도:</strong> ${loc.accuracy_m ?? '-'}m</p><button id="close-${loc.student_id}" style="border:none;background:#e7eefc;color:#1f3f83;padding:6px 10px;border-radius:8px;cursor:pointer;">닫기</button></div>` });
 
       let nameLabelOverlay;
       if (showNameLabel) {
-        const shortLabel = getShortLabelText(loc.student_name, loc.student_id);
-        const staleStyle = isStale ? 'opacity:0.6;filter:grayscale(0.25);' : '';
-        nameLabelOverlay = new kakao.maps.CustomOverlay({
-          map,
-          position,
-          yAnchor: 1.9,
-          content: `<div style="background:white;border:1px solid #d0d7e2;border-radius:999px;padding:2px 6px;font-size:11px;font-weight:700;box-shadow:0 1px 4px rgba(0,0,0,0.15);${staleStyle}">${shortLabel}</div>`,
-        });
+        const shortLabel = (loc.student_name ?? '').trim().slice(-2) || loc.student_id.slice(-2);
+        nameLabelOverlay = new kakao.maps.CustomOverlay({ map, position, yAnchor: 1.9, content: `<div style="background:white;border:1px solid #d0d7e2;border-radius:999px;padding:2px 6px;font-size:11px;font-weight:700;">${shortLabel}</div>` });
       }
 
       kakao.maps.event.addListener(marker, 'click', () => {
+        closeOpened();
         infoWindow.open(map, marker);
+        openedInfoWindowRef.current = infoWindow;
+      });
+
+      kakao.maps.event.addListener(infoWindow, 'domready', () => {
+        const btn = document.getElementById(`close-${loc.student_id}`);
+        if (btn) btn.onclick = () => infoWindow.close();
       });
 
       markers.push(marker);
-      markerStateRef.current.set(loc.student_id, { marker, infoWindow, staleOverlay, nameLabelOverlay });
+      markerStateRef.current.set(loc.student_id, { marker, infoWindow, nameLabelOverlay });
     });
 
-    if (markers.length > 0) {
-      clusterer.addMarkers(markers);
-    }
+    if (markers.length) clusterer.addMarkers(markers);
+    renderTreasureMarkers(map, kakao);
+  }
+
+  function focusStudent(studentId: string) {
+    const state = markerStateRef.current.get(studentId);
+    if (!state || !mapRef.current) return;
+    closeOpened();
+    mapRef.current.panTo(state.marker.getPosition());
+    state.infoWindow.open(mapRef.current, state.marker);
+    openedInfoWindowRef.current = state.infoWindow;
   }
 
   async function load() {
-    const { data: rawLogs, error: logsError } = await supabase.from('treasure_logs').select('*').order('created_at', { ascending: false }).limit(30);
-    if (logsError) {
-      console.error('treasure_logs select error:', logsError);
-      setErrorMessage(`획득 로그 조회 오류: ${logsError.message}`);
+    const [{ data: rawLogs, error: logsError }, { data: loc, error: locError }, { data: treasureData, error: treasureError }] = await Promise.all([
+      supabase.from('treasure_logs').select('*').order('created_at', { ascending: false }).limit(300),
+      supabase.from('current_locations').select('student_id, student_name, latitude, longitude, accuracy_m, updated_at').order('updated_at', { ascending: false }),
+      supabase.from('treasures').select('id, name, order_index, radius_m, latitude, longitude').order('order_index', { ascending: true }),
+    ]);
+
+    if (logsError || locError || treasureError) {
+      setErrorMessage(logsError?.message ?? locError?.message ?? treasureError?.message ?? '조회 오류');
       return;
     }
+
     const list = (rawLogs ?? []) as TreasureLog[];
-    setLogs(list);
-    const map = new Map<string, { student_name: string; student_id: string; count: number }>();
+    setLogs(list.slice(0, 30));
+    const countMap = new Map<string, { student_name: string; student_id: string; count: number }>();
     list.forEach((l) => {
-      const key = `${l.student_id}-${l.student_name}`;
-      const prev = map.get(key) ?? { student_id: l.student_id, student_name: l.student_name, count: 0 };
+      const prev = countMap.get(l.student_id) ?? { student_name: l.student_name, student_id: l.student_id, count: 0 };
       prev.count += 1;
-      map.set(key, prev);
+      countMap.set(l.student_id, prev);
     });
-    setStats(Array.from(map.values()).sort((a, b) => b.count - a.count));
-
-    const { data: loc, error: locationError } = await supabase
-      .from('current_locations')
-      .select('student_id, student_name, latitude, longitude, accuracy_m, updated_at')
-      .order('updated_at', { ascending: false });
-
-    if (locationError) {
-      console.error('current_locations select error:', locationError);
-      setErrorMessage(`위치 조회 오류: ${locationError.message}`);
-      return;
-    }
-
-    setErrorMessage('');
+    setStats(Array.from(countMap.values()).sort((a, b) => b.count - a.count));
     setLocations((loc ?? []) as StudentLocation[]);
+    setTreasures((treasureData ?? []) as Treasure[]);
+    setErrorMessage('');
   }
 
   function handleLogin() {
-    const isPasswordCorrect = pw === (process.env.NEXT_PUBLIC_TEACHER_PASSWORD ?? '1234');
-    if (isPasswordCorrect) {
-      setOk(true);
-      setErrorMessage('');
-      window.localStorage.setItem(TEACHER_AUTH_STORAGE_KEY, 'true');
-      return;
+    if (pw === (process.env.NEXT_PUBLIC_TEACHER_PASSWORD ?? '1234')) {
+      setOk(true); setErrorMessage(''); window.localStorage.setItem(TEACHER_AUTH_STORAGE_KEY, 'true'); return;
     }
-
     setErrorMessage('비밀번호가 올바르지 않습니다. 다시 확인해주세요.');
   }
 
-  function handleLogout() {
-    window.localStorage.removeItem(TEACHER_AUTH_STORAGE_KEY);
-    setOk(false);
-    setPw('');
-    setErrorMessage('');
-  }
-
-  if (!ok) {
-    return (
-      <main>
-        <h1>교사용 대시보드</h1>
-        {!!errorMessage && <p className="small">{errorMessage}</p>}
-        <div className="card">
-          <input type="password" placeholder="비밀번호" value={pw} onChange={(e) => setPw(e.target.value)} />
-          <button onClick={handleLogin}>입장</button>
-        </div>
-      </main>
-    );
-  }
+  if (!ok) return <main><h1>교사용 대시보드</h1>{!!errorMessage && <p className="small">{errorMessage}</p>}<div className="card"><input type="password" placeholder="비밀번호" value={pw} onChange={(e) => setPw(e.target.value)} /><button onClick={handleLogin}>입장</button></div></main>;
 
   return (
     <main className="teacher-main">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
-        <h1>교사용 대시보드</h1>
-        <button onClick={handleLogout}>로그아웃</button>
-      </div>
+      <div className="teacher-header"><h1>교사용 대시보드</h1><button className="teacher-logout" onClick={() => { window.localStorage.removeItem(TEACHER_AUTH_STORAGE_KEY); setOk(false); }}>로그아웃</button></div>
       {!!errorMessage && <p className="small">{errorMessage}</p>}
-      <div className="card teacher-map-card">
-        <h3>학생 위치 지도 (마지막 위치)</h3>
-        <div ref={mapContainerRef} className="teacher-map" />
+
+      <div className="card teacher-filter-card">
+        <div className="teacher-class-filters">{classes.map((c) => <button key={c} className={`teacher-filter-button ${selectedClass === c ? 'active' : ''}`} onClick={() => setSelectedClass(c)}>{c}</button>)}</div>
+        <input placeholder="학번 또는 이름 검색" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
       </div>
-      <div className="card">
-        <h3>학생별 획득 수</h3>
-        {stats.map((s) => <p key={s.student_id + s.student_name}>{s.student_name}({s.student_id}): {s.count}개</p>)}
+
+      <div className="card teacher-map-card"><h3>학생/보물 위치 지도</h3><div ref={mapContainerRef} className="teacher-map" /></div>
+
+      <div className="teacher-bottom-grid">
+        <div className="card"><h3>학생 위치 목록</h3><div className="teacher-student-list">{locationRows.map((row) => <button key={row.student_id} className="teacher-student-item" onClick={() => focusStudent(row.student_id)}><strong>{row.student_id} {row.student_name}</strong><span>갱신: {new Date(row.updated_at).toLocaleString('ko-KR')}</span><span>정확도: {row.accuracy_m ?? '-'}m / 획득: {row.count}개</span></button>)}</div></div>
+        <div className="card"><h3>학생별 획득 수</h3>{displayedStats.map((s) => <p key={s.student_id}>{s.student_name}({s.student_id}): {s.count}개</p>)}{filteredStats.length > TOP_LIMIT && <button className="teacher-toggle" onClick={() => setShowAllStats((v) => !v)}>{showAllStats ? '접기' : '전체 보기'}</button>}</div>
       </div>
-      <div className="card">
-        <h3>최근 획득 로그</h3>
-        {logs.map((l) => <p key={l.id}>{new Date(l.created_at).toLocaleTimeString()} - {l.student_name}({l.student_id}) / {l.treasure_name ?? l.treasure_id}</p>)}
-      </div>
+
+      <div className="card"><h3>최근 획득 로그</h3>{logs.map((l) => <p key={l.id}>{new Date(l.created_at).toLocaleTimeString()} - {l.student_name}({l.student_id}) / {l.treasure_name ?? l.treasure_id}</p>)}</div>
     </main>
   );
 }
