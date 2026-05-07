@@ -35,6 +35,7 @@ export default function Home() {
   const [overlayImageError, setOverlayImageError] = useState(false);
   const [cameraPlaybackError, setCameraPlaybackError] = useState('');
   const [message, setMessage] = useState('');
+  const [isRefreshingLocation, setIsRefreshingLocation] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSavedRef = useRef<PositionSnapshot | null>(null);
   const lastSavedAtRef = useRef<number>(0);
@@ -49,6 +50,62 @@ export default function Home() {
     fetchTreasures();
     fetchMyLogs(student.studentId);
   }, [student]);
+
+  async function saveCurrentLocation(studentInfo: Student, pos: GeolocationPosition) {
+    const loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+    const accuracy = pos.coords.accuracy;
+
+    setCurrent(loc);
+    setCurrentAccuracy(accuracy);
+
+    const { error } = await supabase.from('current_locations').upsert({
+      student_id: studentInfo.studentId,
+      student_name: studentInfo.studentName,
+      latitude: loc.latitude,
+      longitude: loc.longitude,
+      accuracy_m: accuracy,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'student_id' });
+
+    if (error) {
+      console.error('current_locations upsert error:', error);
+      throw error;
+    }
+
+    lastSavedRef.current = { ...loc, accuracy };
+    lastSavedAtRef.current = Date.now();
+  }
+
+  async function manualRefreshLocation() {
+    if (!student || !navigator.geolocation || isRefreshingLocation) return;
+
+    setIsRefreshingLocation(true);
+    setMessage('');
+
+    try {
+      const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: 10000
+        });
+      });
+
+      await saveCurrentLocation(student, pos);
+      if (pos.coords.accuracy > 100) {
+        setLocationNotice('위치 신호가 약합니다. 잠시 멈춰서 다시 확인해보세요.');
+      } else {
+        setLocationNotice('');
+      }
+      setSupabaseErrorMessage('');
+      setMessage('보물 신호가 갱신되었습니다.');
+    } catch (error) {
+      console.error('manual location refresh error:', error);
+      setMessage('위치 정보를 갱신하지 못했습니다. 위치 권한을 확인해주세요.');
+    } finally {
+      setIsRefreshingLocation(false);
+    }
+  }
 
   useEffect(() => {
     if (!student) return;
@@ -65,6 +122,9 @@ export default function Home() {
     const watchId = navigator.geolocation.watchPosition(
       async (pos) => {
         const loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+        const now = Date.now();
+        const previous = lastSavedRef.current;
+
         setCurrent(loc);
         setCurrentAccuracy(pos.coords.accuracy);
 
@@ -72,38 +132,20 @@ export default function Home() {
           setLocationNotice('위치 신호가 약합니다. 잠시 멈춰서 다시 확인해보세요.');
         }
 
-        const now = Date.now();
-        if (now - lastSavedAtRef.current < 30000) {
-          return;
-        }
+        if (now - lastSavedAtRef.current < 30000) return;
+        if (previous && distanceMeter(previous, loc) < 5) return;
 
-        const previous = lastSavedRef.current;
-        if (previous && distanceMeter(previous, loc) < 5) {
-          return;
-        }
-
-        const { error } = await supabase.from('current_locations').upsert({
-          student_id: student.studentId,
-          student_name: student.studentName,
-          latitude: loc.latitude,
-          longitude: loc.longitude,
-          accuracy_m: pos.coords.accuracy,
-          updated_at: new Date().toISOString()
-        }, { onConflict: 'student_id' });
-
-        if (error) {
-          console.error('current_locations upsert error:', error);
+        try {
+          await saveCurrentLocation(student, pos);
+          if (pos.coords.accuracy <= 100) {
+            setLocationNotice('');
+          }
+          setSupabaseErrorMessage('');
+        } catch (error) {
+          const upsertError = error as Error;
           setLocationNotice('위치 저장 중 오류가 발생했습니다.');
-          setSupabaseErrorMessage(`위치 저장 실패: ${error.message}`);
-          return;
+          setSupabaseErrorMessage(`위치 저장 실패: ${upsertError.message}`);
         }
-
-        lastSavedRef.current = { ...loc, accuracy: pos.coords.accuracy };
-        lastSavedAtRef.current = now;
-        if (pos.coords.accuracy <= 100) {
-          setLocationNotice('');
-        }
-        setSupabaseErrorMessage('');
       },
       (error) => {
         if (error.code === error.PERMISSION_DENIED) {
@@ -352,13 +394,26 @@ export default function Home() {
     <main>
       <h1>보물찾기</h1>
       <div className="card">
-        <div className="row"><strong>{student.studentName} ({student.studentId})</strong><button onClick={() => { localStorage.removeItem('dh-student'); setStudent(null); }} style={{ width: 80, padding: 8 }}>로그아웃</button></div>
+        <div className="row"><strong>{student.studentName} ({student.studentId})</strong><div className="student-actions"><button className="mini-button mini-button--secondary" onClick={manualRefreshLocation} disabled={isRefreshingLocation}>{isRefreshingLocation ? '갱신 중...' : '새로고침'}</button><button className="mini-button" onClick={() => { localStorage.removeItem('dh-student'); setStudent(null); }}>로그아웃</button></div></div>
         {!current && <p className="small">위치 신호를 확인하는 중입니다.</p>}
         {!!locationNotice && <p className="small">{locationNotice}</p>}
         {!!supabaseErrorMessage && <p className="small">{supabaseErrorMessage}</p>}
-        <p className="small">보물 신호는 자동으로 갱신됩니다.</p>
         <p className="small">보물 신호는 이동하면서 자동으로 바뀝니다.</p>
+        <p className="small">새로고침 버튼을 누르면 위치 정보가 바로 갱신됩니다.</p>
         <p className="small">건물 안이나 이동 중에는 신호가 늦게 바뀔 수 있습니다.</p>
+
+        <section className="signal-guide">
+          <h3 className="signal-guide__title">보물 신호 안내</h3>
+          <ul className="signal-guide__list">
+            <li className="signal-guide__item"><span className="signal-dot signal-dot--cold" aria-hidden />신호 없음 - 반경 밖</li>
+            <li className="signal-guide__item"><span className="signal-dot signal-dot--weak" aria-hidden />약한 신호 - 반경 160m 이내</li>
+            <li className="signal-guide__item"><span className="signal-dot signal-dot--warm" aria-hidden />중간 신호 - 반경 120m 이내</li>
+            <li className="signal-guide__item"><span className="signal-dot signal-dot--hot" aria-hidden />강한 신호 - 반경 80m 이내</li>
+            <li className="signal-guide__item"><span className="signal-dot signal-dot--available" aria-hidden />획득 가능 - 반경 50m 이내</li>
+            <li className="signal-guide__item"><span className="signal-dot signal-dot--collected" aria-hidden />획득 완료</li>
+          </ul>
+          <p className="small">GPS 상태에 따라 실제 반응 범위는 조금 달라질 수 있습니다.</p>
+        </section>
       </div>
 
       <div className="card">
