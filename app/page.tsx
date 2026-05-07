@@ -402,6 +402,7 @@ export default function Home() {
           <p className="small">보물 신호는 이동하면서 자동으로 바뀝니다.</p>
           <p className="small">새로고침 버튼을 누르면 위치 정보가 바로 갱신됩니다.</p>
           <p className="small">건물 안이나 이동 중에는 신호가 늦게 바뀔 수 있습니다.</p>
+          <p className="small">획득 가능 상태가 되었을 때 클릭하고, 카메라가 켜졌을 때 보물 캐릭터를 누르면 보물이 획득됩니다.</p>
         </div>
 
         <section className="signal-guide">
