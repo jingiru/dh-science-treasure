@@ -408,10 +408,10 @@ export default function Home() {
           <h3 className="signal-guide__title">보물 신호 안내</h3>
           <div className="signal-legend">
             <span className="signal-legend__item"><span className="signal-dot signal-dot--cold" aria-hidden />반경 밖</span>
-            <span className="signal-legend__item"><span className="signal-dot signal-dot--weak" aria-hidden />160m</span>
-            <span className="signal-legend__item"><span className="signal-dot signal-dot--warm" aria-hidden />120m</span>
-            <span className="signal-legend__item"><span className="signal-dot signal-dot--hot" aria-hidden />80m</span>
-            <span className="signal-legend__item"><span className="signal-dot signal-dot--available" aria-hidden />50m</span>
+            <span className="signal-legend__item"><span className="signal-dot signal-dot--weak" aria-hidden />100m</span>
+            <span className="signal-legend__item"><span className="signal-dot signal-dot--warm" aria-hidden />70m</span>
+            <span className="signal-legend__item"><span className="signal-dot signal-dot--hot" aria-hidden />50m</span>
+            <span className="signal-legend__item"><span className="signal-dot signal-dot--available" aria-hidden />30m(획득 가능)</span>
             <span className="signal-legend__item"><span className="signal-dot signal-dot--collected" aria-hidden />완료</span>
           </div>
           <p className="small signal-guide__note">GPS 상태에 따라 실제 반응 범위는 조금 달라질 수 있습니다.</p>
