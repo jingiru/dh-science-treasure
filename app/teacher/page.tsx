@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase, TreasureLog } from '@/lib/supabase';
 
 const TEACHER_AUTH_STORAGE_KEY = 'dh-teacher-auth';
-const DEFAULT_CENTER = { lat: 36.3744, lng: 127.3867 };
+const DEFAULT_CENTER = { lat: 36.375508, lng: 127.375847 };
 const TOP_LIMIT = 15;
 
 type StudentLocation = {
@@ -34,7 +34,7 @@ export default function TeacherPage() {
   const [ok, setOk] = useState(false);
   const [logs, setLogs] = useState<TreasureLog[]>([]);
   const [locations, setLocations] = useState<StudentLocation[]>([]);
-  const [stats, setStats] = useState<{ student_name: string; student_id: string; count: number }[]>([]);
+  const [stats, setStats] = useState<{ student_name: string; student_id: string; count: number; updated_at?: string | null; accuracy_m?: number | null }[]>([]);
   const [treasures, setTreasures] = useState<Treasure[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
   const [selectedClass, setSelectedClass] = useState('전체');
@@ -70,13 +70,6 @@ export default function TeacherPage() {
   );
 
   const displayedStats = showAllStats ? filteredStats : filteredStats.slice(0, TOP_LIMIT);
-
-  const locationRows = useMemo(() => {
-    const statMap = new Map(filteredStats.map((s) => [s.student_id, s.count]));
-    return [...filteredLocations]
-      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
-      .map((loc) => ({ ...loc, count: statMap.get(loc.student_id) ?? 0 }));
-  }, [filteredLocations, filteredStats]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -166,7 +159,7 @@ export default function TeacherPage() {
     items.forEach((loc) => {
       const position = new kakao.maps.LatLng(loc.latitude, loc.longitude);
       const marker = new kakao.maps.Marker({ position, title: `${loc.student_name}(${loc.student_id})` });
-      const infoWindow = new kakao.maps.InfoWindow({ content: `<div style="padding:10px 12px;min-width:220px;line-height:1.5;"><p style="margin:0 0 4px;"><strong>학번:</strong> ${loc.student_id}</p><p style="margin:0 0 4px;"><strong>이름:</strong> ${loc.student_name ?? '이름없음'}</p><p style="margin:0 0 4px;"><strong>마지막 갱신:</strong> ${new Date(loc.updated_at).toLocaleString('ko-KR')}</p><p style="margin:0 0 8px;"><strong>GPS 정확도:</strong> ${loc.accuracy_m ?? '-'}m</p><button id="close-${loc.student_id}" style="border:none;background:#e7eefc;color:#1f3f83;padding:6px 10px;border-radius:8px;cursor:pointer;">닫기</button></div>` });
+      const infoWindow = new kakao.maps.InfoWindow({ content: `<div style="padding:10px 12px;min-width:220px;line-height:1.5;"><p style="margin:0 0 4px;"><strong>학번:</strong> ${loc.student_id}</p><p style="margin:0 0 4px;"><strong>이름:</strong> ${loc.student_name ?? '이름없음'}</p><p style="margin:0 0 4px;"><strong>마지막 갱신:</strong> ${new Date(loc.updated_at).toLocaleString('ko-KR')}</p><p style="margin:0 0 8px;"><strong>GPS 정확도:</strong> ${typeof loc.accuracy_m === 'number' ? loc.accuracy_m.toFixed(3) : '-'}${typeof loc.accuracy_m === 'number' ? 'm' : ''}</p><button id="close-${loc.student_id}" style="border:none;background:#e7eefc;color:#1f3f83;padding:6px 10px;border-radius:8px;cursor:pointer;">닫기</button></div>` });
 
       let nameLabelOverlay;
       if (showNameLabel) {
@@ -215,15 +208,39 @@ export default function TeacherPage() {
     }
 
     const list = (rawLogs ?? []) as TreasureLog[];
+    const locationList = (loc ?? []) as StudentLocation[];
+
     setLogs(list.slice(0, 30));
+    setLocations(locationList);
+
     const countMap = new Map<string, { student_name: string; student_id: string; count: number }>();
     list.forEach((l) => {
       const prev = countMap.get(l.student_id) ?? { student_name: l.student_name, student_id: l.student_id, count: 0 };
       prev.count += 1;
       countMap.set(l.student_id, prev);
     });
-    setStats(Array.from(countMap.values()).sort((a, b) => b.count - a.count));
-    setLocations((loc ?? []) as StudentLocation[]);
+
+    const locationMap = new Map(locationList.map((item) => [item.student_id, item]));
+    const mergedIds = new Set<string>([...countMap.keys(), ...locationMap.keys()]);
+
+    const mergedStats = Array.from(mergedIds).map((studentId) => {
+      const fromLog = countMap.get(studentId);
+      const fromLocation = locationMap.get(studentId);
+      return {
+        student_id: studentId,
+        student_name: fromLocation?.student_name || fromLog?.student_name || '-',
+        count: fromLog?.count ?? 0,
+        updated_at: fromLocation?.updated_at ?? null,
+        accuracy_m: fromLocation?.accuracy_m,
+      };
+    });
+
+    mergedStats.sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count;
+      return a.student_id.localeCompare(b.student_id);
+    });
+
+    setStats(mergedStats);
     setTreasures((treasureData ?? []) as Treasure[]);
     setErrorMessage('');
   }
@@ -250,8 +267,20 @@ export default function TeacherPage() {
       <div className="card teacher-map-card"><h3>학생/보물 위치 지도</h3><div ref={mapContainerRef} className="teacher-map" /></div>
 
       <div className="teacher-bottom-grid">
-        <div className="card"><h3>학생 위치 목록</h3><div className="teacher-student-list">{locationRows.map((row) => <button key={row.student_id} className="teacher-student-item" onClick={() => focusStudent(row.student_id)}><strong>{row.student_id} {row.student_name}</strong><span>갱신: {new Date(row.updated_at).toLocaleString('ko-KR')}</span><span>정확도: {row.accuracy_m ?? '-'}m / 획득: {row.count}개</span></button>)}</div></div>
-        <div className="card"><h3>학생별 획득 수</h3>{displayedStats.map((s) => <p key={s.student_id}>{s.student_name}({s.student_id}): {s.count}개</p>)}{filteredStats.length > TOP_LIMIT && <button className="teacher-toggle" onClick={() => setShowAllStats((v) => !v)}>{showAllStats ? '접기' : '전체 보기'}</button>}</div>
+        <div className="card teacher-status-card">
+          <h3>학생 획득 현황</h3>
+          <div className="teacher-student-list teacher-status-list">
+            {displayedStats.map((s) => (
+              <button key={s.student_id} className="teacher-student-item" onClick={() => focusStudent(s.student_id)}>
+                <strong>{s.student_id} {s.student_name}</strong>
+                <span>획득: {s.count}개</span>
+                <span>갱신: {s.updated_at ? new Date(s.updated_at).toLocaleString('ko-KR') : '-'}</span>
+                <span>GPS 정확도: {typeof s.accuracy_m === 'number' ? `${s.accuracy_m.toFixed(3)}m` : '-'}</span>
+              </button>
+            ))}
+          </div>
+          {filteredStats.length > TOP_LIMIT && <button className="teacher-toggle" onClick={() => setShowAllStats((v) => !v)}>{showAllStats ? '접기' : '펼치기'}</button>}
+        </div>
       </div>
 
       <div className="card"><h3>최근 획득 로그</h3>{logs.map((l) => <p key={l.id}>{new Date(l.created_at).toLocaleTimeString()} - {l.student_name}({l.student_id}) / {l.treasure_name ?? l.treasure_id}</p>)}</div>
