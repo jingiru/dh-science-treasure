@@ -16,6 +16,12 @@ type StudentLocation = {
   updated_at: string;
 };
 
+type StudentLogin = {
+  student_id: string;
+  student_name: string;
+  last_login_at?: string | null;
+};
+
 type Treasure = {
   id: string;
   name: string;
@@ -34,12 +40,14 @@ export default function TeacherPage() {
   const [ok, setOk] = useState(false);
   const [logs, setLogs] = useState<TreasureLog[]>([]);
   const [locations, setLocations] = useState<StudentLocation[]>([]);
+  const [students, setStudents] = useState<StudentLogin[]>([]);
   const [stats, setStats] = useState<{ student_name: string; student_id: string; count: number; updated_at?: string | null; accuracy_m?: number | null }[]>([]);
   const [treasures, setTreasures] = useState<Treasure[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
   const [selectedClass, setSelectedClass] = useState('전체');
   const [searchTerm, setSearchTerm] = useState('');
   const [showAllStats, setShowAllStats] = useState(false);
+  const [showAllMissingLocations, setShowAllMissingLocations] = useState(false);
 
   const mapRef = useRef<any>(null);
   const clustererRef = useRef<any>(null);
@@ -69,7 +77,18 @@ export default function TeacherPage() {
     [stats, selectedClass, searchTerm],
   );
 
+  const filteredStudents = useMemo(
+    () => students.filter((s) => byClass(s.student_id) && bySearch(s.student_id, s.student_name)),
+    [students, selectedClass, searchTerm],
+  );
+
+  const missingLocationStudents = useMemo(() => {
+    const locationStudentIds = new Set(filteredLocations.map((loc) => loc.student_id));
+    return filteredStudents.filter((student) => !locationStudentIds.has(student.student_id));
+  }, [filteredStudents, filteredLocations]);
+
   const displayedStats = showAllStats ? filteredStats : filteredStats.slice(0, TOP_LIMIT);
+  const displayedMissingLocationStudents = showAllMissingLocations ? missingLocationStudents : missingLocationStudents.slice(0, TOP_LIMIT);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -196,14 +215,20 @@ export default function TeacherPage() {
   }
 
   async function load() {
-    const [{ data: rawLogs, error: logsError }, { data: loc, error: locError }, { data: treasureData, error: treasureError }] = await Promise.all([
+    const [
+      { data: rawLogs, error: logsError },
+      { data: loc, error: locError },
+      { data: treasureData, error: treasureError },
+      { data: studentData, error: studentError },
+    ] = await Promise.all([
       supabase.from('treasure_logs').select('*').order('created_at', { ascending: false }).limit(300),
       supabase.from('current_locations').select('student_id, student_name, latitude, longitude, accuracy_m, updated_at').order('updated_at', { ascending: false }),
       supabase.from('treasures').select('id, name, order_index, radius_m, latitude, longitude').order('order_index', { ascending: true }),
+      supabase.from('students').select('student_id, student_name, last_login_at').not('student_id', 'is', null),
     ]);
 
-    if (logsError || locError || treasureError) {
-      setErrorMessage(logsError?.message ?? locError?.message ?? treasureError?.message ?? '조회 오류');
+    if (logsError || locError || treasureError || studentError) {
+      setErrorMessage(logsError?.message ?? locError?.message ?? treasureError?.message ?? studentError?.message ?? '조회 오류');
       return;
     }
 
@@ -212,6 +237,7 @@ export default function TeacherPage() {
 
     setLogs(list.slice(0, 30));
     setLocations(locationList);
+    setStudents((studentData ?? []) as StudentLogin[]);
 
     const countMap = new Map<string, { student_name: string; student_id: string; count: number }>();
     list.forEach((l) => {
@@ -264,6 +290,13 @@ export default function TeacherPage() {
         <input placeholder="학번 또는 이름 검색" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
       </div>
 
+      <div className="card teacher-summary-card">
+        <h3>로그인/위치 수집 요약</h3>
+        <p>전체 로그인 학생: <strong>{filteredStudents.length}명</strong></p>
+        <p>위치 수집 성공: <strong>{filteredLocations.length}명</strong></p>
+        <p>위치 미수집: <strong>{missingLocationStudents.length}명</strong></p>
+      </div>
+
       <div className="card teacher-map-card"><h3>학생/보물 위치 지도</h3><div ref={mapContainerRef} className="teacher-map" /></div>
 
       <div className="teacher-bottom-grid">
@@ -280,6 +313,22 @@ export default function TeacherPage() {
             ))}
           </div>
           {filteredStats.length > TOP_LIMIT && <button className="teacher-toggle" onClick={() => setShowAllStats((v) => !v)}>{showAllStats ? '접기' : '펼치기'}</button>}
+        </div>
+
+        <div className="card teacher-missing-location-card">
+          <h3>위치 미수집 학생</h3>
+          <div className="teacher-student-list teacher-missing-location-list">
+            {displayedMissingLocationStudents.length === 0 && <p className="small">현재 조건에서 위치 미수집 학생이 없습니다.</p>}
+            {displayedMissingLocationStudents.map((s) => (
+              <div key={s.student_id} className="teacher-student-item teacher-missing-location-item">
+                <strong>{s.student_id} {s.student_name}</strong>
+                <span>마지막 로그인: {s.last_login_at ? new Date(s.last_login_at).toLocaleString('ko-KR') : '-'}</span>
+                <span>위치 정보 없음 - 위치 권한 허용 후 새로고침 필요</span>
+              </div>
+            ))}
+          </div>
+          {missingLocationStudents.length > TOP_LIMIT && <button className="teacher-toggle" onClick={() => setShowAllMissingLocations((v) => !v)}>{showAllMissingLocations ? '접기' : '펼치기'}</button>}
+          <p className="small teacher-missing-location-guide">학생에게 브라우저 위치 권한을 허용한 뒤, 학생 화면의 새로고침 버튼을 누르도록 안내하세요.</p>
         </div>
       </div>
 
