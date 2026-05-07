@@ -424,6 +424,7 @@ export default function Home() {
         <div className="treasure-grid">
           {statusList.map((t, index) => {
             const disabled = t.signal !== 'available' || t.taken || t.soldOut;
+            const isCollected = t.taken || t.signal === 'collected';
             return (
               <button
                 key={t.id}
@@ -433,6 +434,17 @@ export default function Home() {
                 disabled={disabled}
                 aria-label={`보물 ${index + 1}`}
               >
+                {isCollected && t.image_url && (
+                  <img
+                    src={t.image_url}
+                    alt=""
+                    className="treasure-icon__collected-image"
+                    aria-hidden="true"
+                    onError={(event) => {
+                      event.currentTarget.style.display = 'none';
+                    }}
+                  />
+                )}
                 <span className="treasure-icon__number">{index + 1}</span>
                 {t.taken && <span className="treasure-icon__check">✓</span>}
               </button>
