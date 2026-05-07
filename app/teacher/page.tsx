@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { supabase, TreasureLog } from '@/lib/supabase';
 
+const TEACHER_AUTH_STORAGE_KEY = 'dh-teacher-auth';
+
 type StudentLocation = {
   student_id: string;
   latitude: number;
@@ -28,6 +30,14 @@ export default function TeacherPage() {
   const [logs, setLogs] = useState<TreasureLog[]>([]);
   const [locations, setLocations] = useState<StudentLocation[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const isAuthenticated = window.localStorage.getItem(TEACHER_AUTH_STORAGE_KEY) === 'true';
+    if (isAuthenticated) {
+      setOk(true);
+    }
+  }, []);
 
   const mapRef = useRef<any>(null);
   const clustererRef = useRef<any>(null);
@@ -240,13 +250,33 @@ export default function TeacherPage() {
     setLocations((loc ?? []) as StudentLocation[]);
   }
 
+  function handleLogin() {
+    const isPasswordCorrect = pw === (process.env.NEXT_PUBLIC_TEACHER_PASSWORD ?? '1234');
+    if (isPasswordCorrect) {
+      setOk(true);
+      setErrorMessage('');
+      window.localStorage.setItem(TEACHER_AUTH_STORAGE_KEY, 'true');
+      return;
+    }
+
+    setErrorMessage('비밀번호가 올바르지 않습니다. 다시 확인해주세요.');
+  }
+
+  function handleLogout() {
+    window.localStorage.removeItem(TEACHER_AUTH_STORAGE_KEY);
+    setOk(false);
+    setPw('');
+    setErrorMessage('');
+  }
+
   if (!ok) {
     return (
       <main>
         <h1>교사용 대시보드</h1>
+        {!!errorMessage && <p className="small">{errorMessage}</p>}
         <div className="card">
           <input type="password" placeholder="비밀번호" value={pw} onChange={(e) => setPw(e.target.value)} />
-          <button onClick={() => setOk(pw === (process.env.NEXT_PUBLIC_TEACHER_PASSWORD ?? '1234'))}>입장</button>
+          <button onClick={handleLogin}>입장</button>
         </div>
       </main>
     );
@@ -254,7 +284,10 @@ export default function TeacherPage() {
 
   return (
     <main className="teacher-main">
-      <h1>교사용 대시보드</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+        <h1>교사용 대시보드</h1>
+        <button onClick={handleLogout}>로그아웃</button>
+      </div>
       {!!errorMessage && <p className="small">{errorMessage}</p>}
       <div className="card teacher-map-card">
         <h3>학생 위치 지도 (마지막 위치)</h3>
