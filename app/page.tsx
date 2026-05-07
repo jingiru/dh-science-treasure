@@ -7,7 +7,8 @@ import { supabase, Treasure } from '@/lib/supabase';
 type Student = { studentId: string; studentName: string };
 type Coord = { latitude: number; longitude: number };
 type PositionSnapshot = Coord & { accuracy: number };
-type TreasureStatus = Treasure & { near: boolean; taken: boolean; distanceM: number | null; effectiveRadiusM: number; soldOut: boolean };
+type SignalLevel = 'collected' | 'available' | 'hot' | 'warm' | 'weak' | 'cold';
+type TreasureStatus = Treasure & { taken: boolean; signal: SignalLevel; soldOut: boolean };
 
 function distanceMeter(a: Coord, b: Coord) {
   const R = 6371e3;
@@ -28,7 +29,6 @@ export default function Home() {
   const [myLogs, setMyLogs] = useState<string[]>([]);
   const [current, setCurrent] = useState<Coord | null>(null);
   const [currentAccuracy, setCurrentAccuracy] = useState<number | null>(null);
-  const [myTreasureNames, setMyTreasureNames] = useState<string[]>([]);
   const [locationNotice, setLocationNotice] = useState('');
   const [supabaseErrorMessage, setSupabaseErrorMessage] = useState('');
   const [selected, setSelected] = useState<TreasureStatus | null>(null);
@@ -67,7 +67,7 @@ export default function Home() {
         setCurrentAccuracy(pos.coords.accuracy);
 
         if (pos.coords.accuracy > 100) {
-          setLocationNotice('위치 정확도가 낮아 보물 판정이 넓게 적용될 수 있습니다.');
+          setLocationNotice('위치 신호가 약합니다. 잠시 멈춰서 다시 확인해보세요.');
         }
 
         const now = Date.now();
@@ -103,7 +103,13 @@ export default function Home() {
         }
         setSupabaseErrorMessage('');
       },
-      () => undefined,
+      (error) => {
+        if (error.code === error.PERMISSION_DENIED) {
+          setLocationNotice('위치 권한을 허용해주세요.');
+          return;
+        }
+        setLocationNotice('위치 신호를 확인하는 중입니다.');
+      },
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
     );
     return () => navigator.geolocation.clearWatch(watchId);
@@ -117,9 +123,17 @@ export default function Home() {
       const effectiveRadiusM = currentAccuracy
         ? Math.min(100, Math.max(t.radius_m, currentAccuracy * 0.7))
         : t.radius_m;
-      const near = distanceM !== null ? distanceM <= effectiveRadiusM : false;
       const taken = myLogs.includes(String(t.id));
-      return { ...t, near, taken, distanceM, effectiveRadiusM, soldOut: t.remaining_count <= 0 };
+      let signal: SignalLevel = 'cold';
+      if (taken) {
+        signal = 'collected';
+      } else if (distanceM !== null) {
+        if (distanceM <= effectiveRadiusM) signal = 'available';
+        else if (distanceM <= effectiveRadiusM * 1.6) signal = 'hot';
+        else if (distanceM <= effectiveRadiusM * 2.4) signal = 'warm';
+        else if (distanceM <= effectiveRadiusM * 3.2) signal = 'weak';
+      }
+      return { ...t, taken, signal, soldOut: t.remaining_count <= 0 };
     });
   }, [treasures, current, currentAccuracy, myLogs]);
 
@@ -142,7 +156,6 @@ export default function Home() {
     }
     const logs = data ?? [];
     setMyLogs(logs.map((v) => String(v.treasure_id)));
-    setMyTreasureNames(logs.map((v) => v.treasure_name as string).filter(Boolean));
   }
 
   async function login() {
@@ -185,6 +198,13 @@ export default function Home() {
   }
 
   async function openCamera(t: TreasureStatus) {
+    if (t.taken) {
+      setMessage('이미 획득한 보물입니다.');
+      return;
+    }
+    if (t.signal !== 'available' || t.soldOut) {
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
       if (videoRef.current) {
@@ -289,35 +309,39 @@ export default function Home() {
       <h1>보물찾기</h1>
       <div className="card">
         <div className="row"><strong>{student.studentName} ({student.studentId})</strong><button onClick={() => { localStorage.removeItem('dh-student'); setStudent(null); }} style={{ width: 80, padding: 8 }}>로그아웃</button></div>
-        <p className="small">현재 위치: {current ? `${current.latitude.toFixed(5)}, ${current.longitude.toFixed(5)}` : '확인 중'}</p>
+        {!current && <p className="small">위치 신호를 확인하는 중입니다.</p>}
         {!!locationNotice && <p className="small">{locationNotice}</p>}
         {!!supabaseErrorMessage && <p className="small">{supabaseErrorMessage}</p>}
-        <p className="small">※ 앱이 백그라운드 상태이거나 화면이 꺼지면 위치 갱신이 일시 중단될 수 있습니다.</p>
+        <p className="small">보물 신호는 자동으로 갱신됩니다.</p>
+        <p className="small">보물 신호는 이동하면서 자동으로 바뀝니다.</p>
+        <p className="small">건물 안이나 이동 중에는 신호가 늦게 바뀔 수 있습니다.</p>
       </div>
 
-      <h3>보물 목록</h3>
-      {statusList.map((t) => (
-        <div key={t.id} className="card">
-          <div className="row"><strong>{t.name}</strong>{t.near ? <span className="badge badge-ok">탐색 가능</span> : <span className="badge badge-no">이동 필요</span>}</div>
-          <p>{t.description}</p>
-          <p className="small">현재 거리: {t.distanceM !== null ? `${Math.round(t.distanceM)} m` : '측정 중'}</p>
-          <p className="small">판정 반경: {Math.round(t.effectiveRadiusM)} m</p>
-          <p className="small">잔여 수량: {t.remaining_count}</p>
-          <button disabled={!t.near || t.taken || t.soldOut} onClick={() => openCamera(t)}>
-            {t.taken ? '이미 획득' : t.soldOut ? '품절' : '카메라로 찾기'}
-          </button>
-        </div>
-      ))}
-
       <div className="card">
-        <h3>내 현황</h3>
-        <p>획득 개수: {myLogs.length}개</p>
-        <p className="small">획득 보물 이름: {myTreasureNames.join(', ') || '없음'}</p>
+        <h3>획득한 보물 {myLogs.length} / 16</h3>
+        <div className="treasure-grid">
+          {statusList.map((t, index) => {
+            const disabled = t.signal !== 'available' || t.taken || t.soldOut;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                className={`treasure-icon treasure-icon--${t.signal}`}
+                onClick={() => openCamera(t)}
+                disabled={disabled}
+                aria-label={`보물 ${index + 1}`}
+              >
+                <span className="treasure-icon__number">{index + 1}</span>
+                {t.taken && <span className="treasure-icon__check">✓</span>}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {selected && (
         <div className="card">
-          <h3>카메라 탐색: {selected.name}</h3>
+          <h3>카메라 탐색</h3>
           <div className="video-wrap">
             <video ref={videoRef} muted playsInline />
             <Image src={selected.image_url} alt={selected.name} width={220} height={220} className="overlay-treasure" onClick={collectTreasure} />
