@@ -99,3 +99,12 @@ with check (true);
 또한 학생 마커가 많을 때 클러스터링을 사용하려면 SDK URL에 `libraries=clusterer`를 포함해야 합니다.
 
 - 예시: `https://dapi.kakao.com/v2/maps/sdk.js?appkey=YOUR_APP_KEY&autoload=false&libraries=clusterer`
+
+
+## 교사용 대시보드 로그인 유지 안내
+
+교사용 대시보드는 간단한 현장 운영을 위해 로그인 성공 여부만 브라우저 `localStorage`(`dh-teacher-auth`)에 저장합니다.
+
+- 저장 값은 인증 여부(`"true"`)만 사용합니다.
+- 교사용 비밀번호 자체는 `localStorage`에 저장하지 않습니다.
+
