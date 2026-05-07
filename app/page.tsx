@@ -275,8 +275,8 @@ export default function Home() {
             value={pinInput}
             onChange={(e) => setPinInput(e.target.value.replace(/\D/g, '').slice(0, 4))}
           />
-          <p className="small">처음 로그인할 때 입력한 숫자 4자리가 이후 로그인 비밀번호로 등록됩니다.</p>
-          <p className="small">비밀번호를 잊어버리면 선생님에게 초기화를 요청하세요.</p>
+          <p className="small">처음 로그인할 때 입력한 숫자 4자리가 비밀번호로 등록됩니다.</p>
+          <p className="small">비밀번호를 잘 기억하세요.</p>
           <button onClick={login}>로그인</button>
           <p className="small">{message}</p>
         </div>
