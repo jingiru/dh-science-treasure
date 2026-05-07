@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import Image from 'next/image';
 import { supabase, Treasure } from '@/lib/supabase';
 
 type Student = { studentId: string; studentName: string };
@@ -32,6 +31,9 @@ export default function Home() {
   const [locationNotice, setLocationNotice] = useState('');
   const [supabaseErrorMessage, setSupabaseErrorMessage] = useState('');
   const [selected, setSelected] = useState<TreasureStatus | null>(null);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [overlayImageError, setOverlayImageError] = useState(false);
+  const [cameraPlaybackError, setCameraPlaybackError] = useState('');
   const [message, setMessage] = useState('');
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSavedRef = useRef<PositionSnapshot | null>(null);
@@ -114,6 +116,39 @@ export default function Home() {
     );
     return () => navigator.geolocation.clearWatch(watchId);
   }, [student]);
+
+
+  useEffect(() => {
+    if (!selected) {
+      setOverlayImageError(false);
+      setCameraPlaybackError('');
+    }
+  }, [selected]);
+
+  useEffect(() => {
+    if (!selected || !cameraStream || !videoRef.current) return;
+
+    const video = videoRef.current;
+    video.srcObject = cameraStream;
+    video.play().catch((error) => {
+      console.error('camera play error:', error);
+      setCameraPlaybackError('카메라 재생을 시작하지 못했습니다. 화면을 한 번 터치해보세요.');
+    });
+  }, [selected, cameraStream]);
+
+  useEffect(() => {
+    if (selected) return;
+    if (!cameraStream) return;
+
+    cameraStream.getTracks().forEach((track) => track.stop());
+    setCameraStream(null);
+  }, [selected, cameraStream]);
+
+  useEffect(() => {
+    return () => {
+      cameraStream?.getTracks().forEach((track) => track.stop());
+    };
+  }, [cameraStream]);
 
   const statusList = useMemo<TreasureStatus[]>(() => {
     return treasures.map((t) => {
@@ -205,23 +240,32 @@ export default function Home() {
     if (t.signal !== 'available' || t.soldOut) {
       return;
     }
+
+    setSelected(t);
+    setOverlayImageError(false);
+    setCameraPlaybackError('');
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
-      setSelected(t);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false
+      });
+      setCameraStream(stream);
       setSupabaseErrorMessage('');
     } catch (error) {
       console.error('camera open error:', error);
+      setSelected(null);
+      setCameraStream(null);
       setMessage('카메라 권한이 필요합니다.');
     }
   }
 
   function closeCamera() {
-    const stream = videoRef.current?.srcObject as MediaStream | null;
-    stream?.getTracks().forEach((track) => track.stop());
+    cameraStream?.getTracks().forEach((track) => track.stop());
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setCameraStream(null);
     setSelected(null);
   }
 
@@ -343,10 +387,23 @@ export default function Home() {
         <div className="card">
           <h3>카메라 탐색</h3>
           <div className="video-wrap">
-            <video ref={videoRef} muted playsInline />
-            <Image src={selected.image_url} alt={selected.name} width={220} height={220} className="overlay-treasure" onClick={collectTreasure} />
+            <video ref={videoRef} muted playsInline autoPlay />
+            {overlayImageError ? (
+              <button type="button" className="overlay-treasure" onClick={collectTreasure} aria-label={`${selected.name} 기본 보물`}>
+                🎁
+              </button>
+            ) : (
+              <img
+                src={selected.image_url}
+                alt={selected.name}
+                className="overlay-treasure"
+                onClick={collectTreasure}
+                onError={() => setOverlayImageError(true)}
+              />
+            )}
           </div>
           <p className="small">화면의 보물 이미지를 터치하면 획득됩니다.</p>
+          {!!cameraPlaybackError && <p className="small">{cameraPlaybackError}</p>}
           <button onClick={closeCamera}>닫기</button>
         </div>
       )}
