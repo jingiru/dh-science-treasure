@@ -35,13 +35,41 @@ declare global {
   interface Window { kakao?: any }
 }
 
+
+
+function formatDuration(ms: number) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) return `${hours}시간 ${minutes}분 ${seconds}초`;
+  if (minutes > 0) return `${minutes}분 ${seconds}초`;
+  return `${seconds}초`;
+}
+
+function rankLabel(rank: number) {
+  if (rank === 1) return '🏆 1위';
+  if (rank === 2) return '🥈 2위';
+  if (rank === 3) return '🥉 3위';
+  return `${rank}위`;
+}
 export default function TeacherPage() {
   const [pw, setPw] = useState('');
   const [ok, setOk] = useState(false);
   const [logs, setLogs] = useState<TreasureLog[]>([]);
   const [locations, setLocations] = useState<StudentLocation[]>([]);
   const [students, setStudents] = useState<StudentLogin[]>([]);
-  const [stats, setStats] = useState<{ student_name: string; student_id: string; count: number; updated_at?: string | null; accuracy_m?: number | null }[]>([]);
+  const [stats, setStats] = useState<{
+    student_name: string;
+    student_id: string;
+    count: number;
+    updated_at?: string | null;
+    accuracy_m?: number | null;
+    completed: boolean;
+    rank?: number;
+    durationMs?: number;
+  }[]>([]);
   const [treasures, setTreasures] = useState<Treasure[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
   const [selectedClass, setSelectedClass] = useState('전체');
@@ -216,35 +244,100 @@ export default function TeacherPage() {
 
   async function load() {
     const [
-      { data: rawLogs, error: logsError },
+      { data: allLogsData, error: allLogsError },
+      { data: recentLogsData, error: recentLogsError },
       { data: loc, error: locError },
       { data: treasureData, error: treasureError },
       { data: studentData, error: studentError },
     ] = await Promise.all([
-      supabase.from('treasure_logs').select('*').order('created_at', { ascending: false }).limit(300),
+      supabase.from('treasure_logs').select('*').order('created_at', { ascending: false }).range(0, 5000),
+      supabase.from('treasure_logs').select('*').order('created_at', { ascending: false }).limit(30),
       supabase.from('current_locations').select('student_id, student_name, latitude, longitude, accuracy_m, updated_at').order('updated_at', { ascending: false }),
       supabase.from('treasures').select('id, name, order_index, radius_m, latitude, longitude').order('order_index', { ascending: true }),
       supabase.from('students').select('student_id, student_name, last_login_at').not('student_id', 'is', null),
     ]);
 
-    if (logsError || locError || treasureError || studentError) {
-      setErrorMessage(logsError?.message ?? locError?.message ?? treasureError?.message ?? studentError?.message ?? '조회 오류');
+    if (allLogsError) console.error('allLogs 조회 오류', allLogsError);
+    if (recentLogsError) console.error('recentLogs 조회 오류', recentLogsError);
+    if (locError) console.error('current_locations 조회 오류', locError);
+    if (treasureError) console.error('treasures 조회 오류', treasureError);
+    if (studentError) console.error('students 조회 오류', studentError);
+
+    if (allLogsError || recentLogsError || locError || treasureError || studentError) {
+      setErrorMessage(
+        allLogsError?.message ??
+          recentLogsError?.message ??
+          locError?.message ??
+          treasureError?.message ??
+          studentError?.message ??
+          '조회 오류',
+      );
       return;
     }
 
-    const list = (rawLogs ?? []) as TreasureLog[];
+    const allLogs = (allLogsData ?? []) as TreasureLog[];
+    const recentLogs = (recentLogsData ?? []) as TreasureLog[];
     const locationList = (loc ?? []) as StudentLocation[];
+    const treasureList = (treasureData ?? []) as Treasure[];
 
-    setLogs(list.slice(0, 30));
+    setLogs(recentLogs);
     setLocations(locationList);
     setStudents((studentData ?? []) as StudentLogin[]);
+    setTreasures(treasureList);
 
-    const countMap = new Map<string, { student_name: string; student_id: string; count: number }>();
-    list.forEach((l) => {
-      const prev = countMap.get(l.student_id) ?? { student_name: l.student_name, student_id: l.student_id, count: 0 };
-      prev.count += 1;
-      countMap.set(l.student_id, prev);
+    const validTreasureIds = new Set(
+      treasureList.filter((t) => t.order_index >= 1 && t.order_index <= 16).map((t) => String(t.id)),
+    );
+    const totalTreasureCount = validTreasureIds.size;
+    const validLogs = allLogs.filter((log) => validTreasureIds.has(String(log.treasure_id)));
+
+    const studentTreasureEarliest = new Map<string, Map<string, TreasureLog>>();
+    validLogs.forEach((log) => {
+      const sid = String(log.student_id);
+      const tid = String(log.treasure_id);
+      if (!studentTreasureEarliest.has(sid)) studentTreasureEarliest.set(sid, new Map());
+      const perTreasure = studentTreasureEarliest.get(sid)!;
+      const prev = perTreasure.get(tid);
+      if (!prev || new Date(log.created_at).getTime() < new Date(prev.created_at).getTime()) {
+        perTreasure.set(tid, log);
+      }
     });
+
+    const rankingBase: { student_id: string; durationMs: number; completedAt: number }[] = [];
+    const countMap = new Map<string, { student_name: string; student_id: string; count: number; completed: boolean; durationMs?: number }>();
+
+    studentTreasureEarliest.forEach((treasureMap, studentId) => {
+      const uniqueLogs = Array.from(treasureMap.values()).sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+      );
+      const count = uniqueLogs.length;
+      const completed = totalTreasureCount > 0 && count >= totalTreasureCount;
+      const studentName = uniqueLogs[0]?.student_name ?? '-';
+      const info: { student_name: string; student_id: string; count: number; completed: boolean; durationMs?: number } = {
+        student_name: studentName,
+        student_id: studentId,
+        count,
+        completed,
+      };
+
+      if (completed) {
+        const firstAt = new Date(uniqueLogs[0].created_at).getTime();
+        const completedAt = new Date(uniqueLogs[totalTreasureCount - 1].created_at).getTime();
+        const durationMs = Math.max(0, completedAt - firstAt);
+        info.durationMs = durationMs;
+        rankingBase.push({ student_id: studentId, durationMs, completedAt });
+      }
+
+      countMap.set(studentId, info);
+    });
+
+    rankingBase.sort((a, b) => {
+      if (a.durationMs !== b.durationMs) return a.durationMs - b.durationMs;
+      if (a.completedAt !== b.completedAt) return a.completedAt - b.completedAt;
+      return a.student_id.localeCompare(b.student_id);
+    });
+    const rankMap = new Map<string, number>();
+    rankingBase.forEach((r, idx) => rankMap.set(r.student_id, idx + 1));
 
     const locationMap = new Map(locationList.map((item) => [item.student_id, item]));
     const mergedIds = new Set<string>([...countMap.keys(), ...locationMap.keys()]);
@@ -256,18 +349,26 @@ export default function TeacherPage() {
         student_id: studentId,
         student_name: fromLocation?.student_name || fromLog?.student_name || '-',
         count: fromLog?.count ?? 0,
+        completed: fromLog?.completed ?? false,
+        rank: rankMap.get(studentId),
+        durationMs: fromLog?.durationMs,
         updated_at: fromLocation?.updated_at ?? null,
         accuracy_m: fromLocation?.accuracy_m,
       };
     });
 
     mergedStats.sort((a, b) => {
+      if (a.completed !== b.completed) return a.completed ? -1 : 1;
+      if (a.completed && b.completed) {
+        const ra = a.rank ?? Number.MAX_SAFE_INTEGER;
+        const rb = b.rank ?? Number.MAX_SAFE_INTEGER;
+        if (ra !== rb) return ra - rb;
+      }
       if (b.count !== a.count) return b.count - a.count;
       return a.student_id.localeCompare(b.student_id);
     });
 
     setStats(mergedStats);
-    setTreasures((treasureData ?? []) as Treasure[]);
     setErrorMessage('');
   }
 
@@ -304,9 +405,15 @@ export default function TeacherPage() {
           <h3>학생 획득 현황</h3>
           <div className="teacher-student-list teacher-status-list">
             {displayedStats.map((s) => (
-              <button key={s.student_id} className="teacher-student-item" onClick={() => focusStudent(s.student_id)}>
+              <button
+                key={s.student_id}
+                className={`teacher-student-item ${s.completed ? 'teacher-student-item--completed' : ''} ${(s.rank ?? 999) <= 3 ? 'teacher-student-item--top3' : ''}`}
+                onClick={() => focusStudent(s.student_id)}
+              >
+                {s.completed && s.rank && <span className={`teacher-rank-badge teacher-rank-badge--${Math.min(s.rank, 4)}`}>{rankLabel(s.rank)}</span>}
                 <strong>{s.student_id} {s.student_name}</strong>
                 <span>획득: {s.count}개</span>
+                {s.completed && typeof s.durationMs === 'number' && <span>소요 시간: {formatDuration(s.durationMs)}</span>}
                 <span>갱신: {s.updated_at ? new Date(s.updated_at).toLocaleString('ko-KR') : '-'}</span>
                 <span>GPS 정확도: {typeof s.accuracy_m === 'number' ? `${s.accuracy_m.toFixed(3)}m` : '-'}</span>
               </button>
